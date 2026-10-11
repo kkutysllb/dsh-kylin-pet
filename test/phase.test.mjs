@@ -286,20 +286,31 @@ test('Task4c·2 不再有 no-phase 空转：近距与远距两种自然游程都
   //    所以「删掉门会不会红」只能在远距观测口上验（近距会因 approach 不再被选中而假绿）。
   for (const gap of [60, 340]) {
     const s = mkScene(undefined, gap)
-    let opens = 0
+    const opened = []
     let approaches = 0
     for (let i = 0; i < 2000; i++) {
       for (const e of s.d.step(1 / 60)) {
-        if (e.type === 'open') opens++
+        if (e.type === 'open') opened.push(e.detail.kind)
         if (e.type === 'intent' && e.intent === 'approach') approaches++
       }
     }
     const spins = s.d.memories.filter((m) => m.aborted === 'no-phase')
     assert.equal(spins.length, 0,
       'gap=' + gap + '：出现 ' + spins.length + ' 条 abort(no-phase) 空转，前 3 条 = ' + JSON.stringify(spins.slice(0, 3)))
-    assert.equal(opens, 0, 'gap=' + gap + '：没有剧本的意图不许 open（实际 ' + opens + ' 次）')
+    // 口径升级（Task 5e）：原来断言 `opens === 0` 是**代理指标** —— 它禁的是一切社交，
+    // 而本意只是禁「没有剧本的意图乱开合演」。底分 0.6 之后 gap=60 会**合法地**开一场 greet，
+    // 那条代理断言会红得没有道理。改成直接钉真正的不变式：
+    const scriptedKeys = Object.keys(C.SCRIPTS)
+    const illegal = opened.filter((k) => scriptedKeys.indexOf(k) < 0)
+    assert.equal(illegal.length, 0,
+      'gap=' + gap + '：每一个 open 的 kind 都必须**有剧本**（实际开了 ' + JSON.stringify(opened) + '）')
+    if (gap === 60) {
+      assert.ok(opened.length > 0,
+        'gap=60 且 aff=0：走近之后**必须真的发生互动** —— 底分让「做得到的事」赢过发呆')
+    }
     if (gap === 340) {
       assert.ok(approaches > 0, 'gap=340 时 approach 必须真的被选中过，否则这条断言是空转的（实际 ' + approaches + ' 次）')
+      assert.equal(opened.length, 0, 'gap=340 且 aff=0：太远时不该隔空社交 —— 先走过去')
     }
   }
 })
@@ -485,4 +496,17 @@ test('Task5b·6 反向对账：SCRIPTS 声明的 who / move 与 enterPhase 认�
   }
 })
 
+
+
+test('Task5b·7 没有 who 的 happy 阶段：**两只都播**（spec §7「打招呼 → 各放 happy」）', () => {
+  // 这条守的是一个真实回归：加 who 路由时曾把原来的「actorB 也播 happy」整段吞掉，
+  // 于是 greet.exchange / gift.open / reconcile.exchange 退化成「只有发起方乐」。
+  // 上面那六条测试一条都抓不到它 —— 它们只测「有 who」的情况。
+  const s = mkScene()
+  assert.ok(s.d.open(s.A, s.B, 'greet', 0))
+  assert.ok(driveInto(s.d, 'exchange', 1000), '必须走到 exchange')
+  console.log('[phase.test] greet.exchange（无 who）：A=' + s.A.clip + ' B=' + s.B.clip)
+  assert.equal(s.A.clip, 'happy', '发起方要乐')
+  assert.equal(s.B.clip, 'happy', '**对方也要乐** —— 无 who 的 happy 是「各放」，不是独占')
+})
 

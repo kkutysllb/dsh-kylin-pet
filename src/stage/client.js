@@ -492,7 +492,11 @@ window.__ModuleLoader__.load({
     function socialScore(candidate, self, other, dist) {
       const W = TUNING.WEIGHT
       const bond = self.bond || { affinity: 0, familiarity: 0 }
-      let s = bond.affinity * W.affinity + bond.familiarity * W.familiarity
+      // **底分 0.6**：能走到这里的候选，门已经放行过（chooseIntent 只对 gate === null 的候选调本函数）。
+      // 所以「打分的候选」=「此刻做得到的事」—— 做得到的事不该比发呆（idle 0.4）更差。
+      // 没有它，affinity=0 时 8 个剧本全在 idle 之下 ⇒ 两只走近之后什么都不做，
+      // 而 greet 在 UNLOCK 里明明是 0 好感就解锁的 ——「解锁了但永远选不上」等于没解锁。
+      let s = 0.6 + bond.affinity * W.affinity + bond.familiarity * W.familiarity
       if (candidate === 'comfort') s += Math.max(0, -other.mood) * 1.2      // 对方越难过越想安慰
       if (candidate === 'tease') s += Math.max(0, self.energy - 0.5) * 1.0
       if (candidate === 'shoulder') s += Math.max(0, bond.affinity) * 0.02
@@ -687,8 +691,17 @@ window.__ModuleLoader__.load({
       /** 进入新阶段的一次性动作：播片 / 设朝向 / 放台词 / 起步。只在 sincePhase === 0 那一拍做。 */
       function enterPhase(spec, actorA, actorB, cur) {
         if (spec.clip) {
-          const target = actorFor(spec, actorA, actorB, cur)
-          if (target) target.play(spec.clip)
+          if (spec.who) {
+            // 声明了 who：动作**独占**给那一只（败者不该也一起乐）。
+            const target = actorFor(spec, actorA, actorB, cur)
+            if (target) target.play(spec.clip)
+          } else {
+            // 没声明 who：**逐字保留原行为** —— happy 阶段两只都播（spec §7「打招呼 → 各放 happy」）。
+            // ⚠️ 这一行曾被改写时整段吞掉，导致 greet.exchange / gift.open / reconcile.exchange
+            // 从「两只都播」退化成「只有发起方播」。2026-10-11 由 Task 5b 子代理发现。
+            if (actorA) actorA.play(spec.clip)
+            if (actorB && spec.clip === 'happy') actorB.play(spec.clip)
+          }
         }
         if (spec.facing === 'toward' && actorA && actorB) actorA.setFacing(actorB.x < actorA.x ? -1 : 1)
         if (spec.say) {
