@@ -537,6 +537,9 @@ window.__ModuleLoader__.load({
      * 工厂作用域函数（函数体逐字照抄计划原文，只把 minds / actors / config 变成形参）。
      */
     function deliverStimulus(minds, actors, stimulus, config) {
+      // V2 react() 的守卫，必须保留：没有它，deliverStimulus(null) 会抛，被 poll 的 try/catch 吞掉
+      // ⇒ since 不推进 ⇒ **整批诱因每 1s 反复重投**。
+      if (!stimulus || KINDS.indexOf(stimulus.kind) < 0) return []
       const ids = qualified(stimulus.kind, config)
       const touched = []
       for (const id of ids) {
@@ -1131,6 +1134,9 @@ window.__ModuleLoader__.load({
         m.x = a.x; m.y = a.y              // chooseIntent 靠它算距离
         minds[a.pet.id] = m
       }
+      // **必须在建导演之前**：createDirector 在创建时就拷贝 world.pairKey，晚了它拿到的是 undefined，
+      // settle 事件会带 pair: undefined（全靠 queueBondEvent 的回退才没出事 —— 而那正是「靠兜底活着」）。
+      world.pairKey = pairKey
       const director = createDirector({
         world: world,
         minds: minds,
@@ -1146,11 +1152,6 @@ window.__ModuleLoader__.load({
           mood: minds[id].mood, energy: minds[id].energy, cooldown: Object.keys(minds[id].cooldown),
         }])),
       })
-      // ⚠️ 计划插入地图写的是「createWorld 的下一行」，此处逐字照此放置：导演在创建时就拷贝
-      // `world.pairKey`（createDirector 内 `const pairKey = world.pairKey`），而这一行还没赋 ——
-      // 于是导演的 pairKey 是 undefined，settle 事件带的 pair 靠 queueBondEvent 的
-      // `|| bondState.pairKey` 回退补正。已上报，建议 V4 收口（把赋值提到建导演之前）。
-      world.pairKey = pairKey
       wireGestures(world)
       let last = performance.now()
       const frame = (now) => {
@@ -1159,7 +1160,14 @@ window.__ModuleLoader__.load({
         if (!document.hidden) {
           world.step(dt)                  // spec R4 + V1 的位移权威：位置仍然只由世界改
           // 位置落定后同步进心智 —— 导演读的是心智上的位置（缺它就 NaN，永远开不了合演）。
-          for (const a of world.actors) { const m = minds[a.pet.id]; if (m) { m.x = a.x; m.y = a.y } }
+          for (const a of world.actors) {
+            const m = minds[a.pet.id]
+            if (!m) continue
+            m.x = a.x; m.y = a.y
+            // 关系也会在会话里变（bump / settle）。不刷新的话，TUNING.UNLOCK 永远停在启动那一刻的值
+            // —— 例如 shoulder 要 affinity ≥ 20，用户把关系养到 20 也要刷新页面才解锁。
+            m.bond = { affinity: bondState.affinity, familiarity: bondState.familiarity }
+          }
           director.step(dt)               // V3b 的演出权威：意图与合演。**顺序是语义**：先落定、再决策
         }
         requestAnimationFrame(frame)

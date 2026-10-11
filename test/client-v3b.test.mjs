@@ -217,3 +217,16 @@ test('心智必须带位置：缺 x/y 时 dist 恒 NaN，社交候选永不入�
   assert.equal(r2.family, 'social', '带位置、关系够时才可能开出社交意图：' + r2.intent)
   assert.ok(SOCIAL.indexOf(r2.intent) >= 0)
 })
+
+test('deliverStimulus(null / 未知 kind) 不抛：缺了守卫会让 since 不推进、整批诱因反复重投', () => {
+  const C = loadContract()
+  const actors = [{ pet: { id: 'kylinzi' }, held: false, plays: [], says: [] }]
+  const minds = { kylinzi: C.createMind('kylinzi') }
+  // V2 的 react() 有这个守卫，Task 5 的 deliverStimulus 一度丢了它。
+  assert.equal(canon(C.deliverStimulus(minds, actors, null, {})), canon([]))
+  assert.equal(canon(C.deliverStimulus(minds, actors, undefined, {})), canon([]))
+  assert.equal(canon(C.deliverStimulus(minds, actors, { kind: 'nope' }, {})), canon([]))
+  // 未知 kind 不该动心智
+  assert.equal(minds.kylinzi.mood, 0)
+})
+
