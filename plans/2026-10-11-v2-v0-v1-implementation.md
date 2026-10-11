@@ -312,7 +312,7 @@ git log --oneline                                    # 恰好一行（孤儿根�
 
 # Phase V1 — 上桌
 
-> V1 起每个 Task 收尾都跑：`node --test test/` + `node scripts/check-assets.mjs assets/pet` + `node scripts/check-clean-room.mjs`。
+> V1 起每个 Task 收尾都跑：`npm test`（= `node --test "test/**/*.test.mjs"`）+ `node scripts/check-assets.mjs assets/pet/main-animation assets/pet/whale-animation` + `node scripts/check-clean-room.mjs`。
 
 ## Task 5: 共享契约真源
 
@@ -393,7 +393,10 @@ test('契约是冻结的（防运行期被改）', () => {
 
 - [ ] **Step 3: 跑**
 
-Run: `node --test test/`  → Expected: **4 pass / 0 fail**。
+Run: `npm test`  → Expected: **4 pass / 0 fail**。
+
+> **执行期更正（Lead 实测）**：原文写 `node --test test/`，在 **Node v24.18.0** 下**必红**——`--test` 的目录位置参数不再被递归展开，而是被当成「一个测试文件」去跑：`✖ test (51ms) 'test failed'`，`tests 1 / pass 0 / fail 1`，exit 1。已在 `/tmp` 空白目录复现（与本仓无关，是 Node 的语义变化）。
+> 正确形式是 glob：`node --test "test/**/*.test.mjs"`（由 Node 自己展开模式）。**不要**用 `node --test "test/**"`——它会把 `test` 目录本身也匹配进去，又踩同一个坑（实测 12 tests / 1 fail）。
 
 - [ ] **Step 4: Commit**
 
@@ -587,13 +590,13 @@ test('真实出厂配置能过校验（防 assets/default-config.jsonc 被改坏
 
 - [ ] **Step 3: 跑**
 
-Run: `node --test test/` → Expected: **11 pass / 0 fail**（Task 5 的 4 + 本任务 7）。
+Run: `npm test` → Expected: **11 pass / 0 fail**（Task 5 的 4 + 本任务 7）。实测 `ℹ tests 11 / pass 11 / fail 0 / duration_ms 79`。
 
 - [ ] **Step 4: 改 package.json（测试目录 + 验收台脚本）**
 
 ```json
 "scripts": {
-  "test": "node --test test/",
+  "test": "node --test \"test/**/*.test.mjs\"",
   "harness": "node tools/harness.mjs",
   "check": "node --check src/shared/contract.js && node --check src/server/entry.js && node --check src/server/pet-config.js && node --check src/server/static-assets.js && node --check src/stage/client.js"
 }
