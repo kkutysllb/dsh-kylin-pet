@@ -717,6 +717,89 @@ Run: `npm test` → Expected: **125 pass / 0 fail**（117 + 8）。**负对照**
 
 ---
 
+## Task 4c: **意图 ≠ 剧本**（阻断 Task 6 的语义缺陷）
+
+**Files:** Modify `src/stage/client.js`、`test/phase.test.mjs`
+
+### 为什么有这一节
+
+Task 3 的 `step()` 里：`open(a, other, pick.intent, clock)` —— **把意图名当剧本名用**。而：
+
+```
+INTENTS.social = ['approach','greet','gift','tease','comfort','shoulder','chase','reconcile','contest']   // 9 个
+SCRIPTS        =  greet,   gift,  tease, comfort,  shoulder,  chase,  reconcile, contest                 // 8 个
+```
+
+`approach` **没有剧本**。执行期只读探针实测（raw）：
+
+| 场景 | 观测 |
+|---|---|
+| aff=0（新装）、4000 拍 | **opens = []** —— 一场合演都不发生（`idle 0.4` 大于 `approach 0.389`） |
+| aff=20 | `opens` 全是 `approach`，每场都是**开一拍 → 下一拍 `abort('no-phase')`**；abort **不上冷却** ⇒ 每两拍循环一次，永远不停 |
+| aff=30 | `shoulder` 终于赢（`0.889` 大于 `0.789`），真走完四阶段并 settle（+3）；但结算后 shoulder 进 180s 冷却 ⇒ **立刻退回 approach 空转** |
+
+⇒ **8 个剧本里 7 个从心智不可达**；Task 6 的验收句「`memories` 从 0 变 1 并断言四阶段」**要么永不触发，要么被一次 abort 触发**（阶段集合 = `approach`）。
+
+### Step 1: 没有剧本的意图**不许开合演**
+
+在 `step()` 的仲裁之前插一道门：
+
+```js
+// 意图名 ≠ 剧本名。approach 是「走过去」这个前导动作，SCRIPTS 里没有它。
+// 没有剧本就**不开合演** —— 否则会 open 一个不存在的剧本，下一拍 abort('no-phase')，
+// 而 abort 不上冷却 ⇒ 每两拍空转一次（执行期实测）。
+if (!SCRIPTS[pick.intent]) {
+  if (pick.intent === 'approach' && other) {
+    a.target = { x: other.x, y: other.y }
+    a.play('walk')
+  } else {
+    a.play('idle')
+  }
+  continue
+}
+```
+
+> 这道门是**按能力开的，不是按名字开的**（判据是 `SCRIPTS[pick.intent]` 而不是 `=== 'approach'`）—— 将来加了意图却忘了配剧本，它同样挡得住。
+
+### Step 2: `approach` 的打分要与距离**同向**
+
+`socialScore` 现在给它一个**固定**的 `+0.5` —— 近处也赢。修好 Step 1 之后，它只是从「空转」变成「站在原地一直想走过去」，8 个剧本仍然抢不到。
+
+```js
+if (candidate === 'approach') {
+  // 只按「值不值得过去」打分：越远越想过去，已经在身边就没有「过去」可言。
+  // 因此它**不参与**下面的距离惩罚 —— 那条惩罚与它的语义正好相反。
+  return 0.5 * Math.min(1, dist / TUNING.SOCIAL_RADIUS)
+}
+```
+
+> 改完的分界（`W.affinity = 0.02`、`W.distance ≈ 0.4`，均由实测反推）：近处（dist≈100）`approach = 0.139` **输给** `idle 0.4`；远处（dist≈360）`approach = 0.5` **赢过** idle ⇒ 两只离得远时会互相走近，**走近之后才是真剧本的舞台**。
+> aff=20 时 `shoulder 0.689` > idle 0.4 ⇒ **真剧本开始赢**，四阶段随之走完、settle、上冷却。
+
+### Step 3: 测试（加进 `test/phase.test.mjs`）
+
+1. **没有剧本的意图不开合演**：构造 `pick.intent = 'approach'` 且距离够近的一拍，断言 `open` **未被调用**（`duet` 仍为 null），且该 actor 拿到了 `target` 或播了 `walk`；
+2. **不再有 `no-phase` 空转**：让场景自然跑 2000 拍，断言 `memories` 里**没有一条** `aborted === 'no-phase'`（修正前这条必红 —— 每两拍产生一条）；
+3. **approach 随距离单调**：`socialScore('approach', …, 360) > socialScore('approach', …, 100) > socialScore('approach', …, 0)`；
+4. **贴近时真剧本能赢**：`affinity = 20`、`dist ≈ 100` 下 `chooseIntent` 返回的 `intent` **必须是 `SCRIPTS` 里的键**（修正前会回 `approach`）；
+5. **端到端**：`affinity = 30`、自然跑 3000 拍，断言 `memories` 里**至少有一次正常收尾**（不带 `aborted`）且 `kind` 是 8 个剧本之一。
+
+Run: `npm test` → Expected: **130 pass / 0 fail**（125 + 5）。**负对照**：把 Step 1 那道门删掉 ⇒ 测试 2 必须红（`no-phase` 空转回来）。
+
+### 记一笔：Task 4b 的负对照锚点原先**不承重**（子代理发现，重要）
+
+Task 4b 计划写「删掉 `duet = null` ⇒ **测试 3 必须红**」。实测：**朴素版测试 3 不会红** —— 因为「逐拍跑到 `duet` 为 null」这种驱动方式里，末阶段的 `deadline`（2s）会兜底 `abort('timeout')` 把槽位清掉，**漏写的 `duet = null` 被 deadline 掩盖了**。
+
+修法：加 `driveToSettle()` —— **推进到第一拍 settle 事件就停**，不借 deadline 兜底，然后在**结算那一拍**断言 `duet === null`。改完 NC 才真红（`122 pass / 3 fail`）。
+
+> **教训：「最终状态对不对」这种断言，会被任何一条兜底路径满足。**
+> 想守住「什么时候释放」，就必须有一个**不经过兜底**的观测口。
+>
+> 这与本仓反复出现的那一类问题同源：`minGap` 断言被点击路径满足、`after === before` 两边都是 `null` 也绿、取键失败时 `0 === 0` 判「一致」。
+> **断言必须能区分「正路走通」和「兜底兜住」。**
+
+---
+
 ## Task 5: 接回主循环（`src/stage/client.js`）
 
 **Files:** Modify `src/stage/client.js`、`test/client-contract.test.mjs`；Create `test/client-v3b.test.mjs`
