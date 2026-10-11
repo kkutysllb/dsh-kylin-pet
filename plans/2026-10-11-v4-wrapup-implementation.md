@@ -204,3 +204,57 @@ Run: `npm test` → Expected: 全绿（3a 时 +4；3b 时计数不变）。
 
 **执行交接**：Task 1/2 可派子代理；**Task 3 Step 1 与 Task 4 必须 Lead + 用户**（涉及真机安装与重启会话）。
 
+
+---
+
+## Task 4 的**实测当前状态**（2026-10-11 由 Lead 查清，执行前必读）
+
+真机安装前，web profile 的实际状态是：
+
+```
+$ ls -la ~/.coder/profiles/web/node_modules | grep kylin
+dsh-kylin-pet -> ../../../../kk_Projects/dsh-kylin-pet/dsh-pet      ← **悬空软链**（目标目录不存在）
+
+$ dsh.profile.bundles  (共 22 项)
+含 "dsh-kylin-pet": **false**                                         ← 根本没被加载
+```
+
+**两条都要处理**：
+
+1. **悬空软链**：它指向 `kk_Projects/dsh-kylin-pet/dsh-pet` —— 而重写后的仓库**根目录就是包根**，`dsh-pet/` 子目录已不存在（那是重写前的布局）。留着它，即使把名字挂进 `bundles[]` 也只会加载失败，而且报错会指向一个「看起来存在」的路径。
+2. **`bundles[]` 里没有它**：所以当前引擎**完全没有加载这个插件** —— 「真加载器 + 真插件激活层」这条唯一未证明的环节，到现在仍然未被证明。
+
+### 建议的执行步骤（用户执行；**会重启引擎，因此会杀掉 Lead 的会话**）
+
+```bash
+REPO=/Users/libing/kk_Projects/dsh-kylin-pet
+
+# 0) 备份 profile 元数据（可逆）
+cp ~/.coder/profiles/web/package.json ~/.coder/profiles/web/package.json.bak-$(date +%s)
+
+# 1) 清掉悬空软链（它指向不存在的 dsh-pet/）
+rm -f ~/.coder/profiles/web/node_modules/dsh-kylin-pet
+
+# 2) 把仓库根装成依赖（file: 协议，指向仓库根而不是 dsh-pet/）
+dsh plugin --profile web add file:$REPO
+
+# 3) 把名字挂进 bundles[]（顺序无所谓；commands 在更早的基础层，所以 ctx.get('commands') 时它已就绪）
+node -e "const f=process.env.HOME+'/.coder/profiles/web/package.json';const p=require(f);const b=p.dsh.profile.bundles;if(!b.includes('dsh-kylin-pet'))b.push('dsh-kylin-pet');require('fs').writeFileSync(f,JSON.stringify(p,null,2)+String.fromCharCode(10))"
+
+# 4) 重启引擎（这一步会结束当前会话）
+```
+
+### 起来之后应当看到（验收句）
+
+1. 引擎日志出现 `[dsh-kylin-pet] kylinzi + xisha @ /dsh-kylin-pet-7341`；
+2. 页面出现两只宠；
+3. `curl <端口>/dsh-kylin-pet-7341/health` 回 `{ok:true,...}`；
+4. `/pet status` 能回话（**若回不了**，说明 `ctx.get('commands')` 在 `apply` 时还没就绪 —— 那就走 README 里的文件操作式重置，并在日志里找 `commands service at apply` 那一行报告给我）。
+
+### 回滚
+
+```bash
+cp ~/.coder/profiles/web/package.json.bak-* ~/.coder/profiles/web/package.json
+```
+并删掉 `node_modules/dsh-kylin-pet`。
+
