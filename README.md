@@ -15,7 +15,7 @@
 | 半侧 | 入口 | 职责 |
 |---|---|---|
 | host | `src/server/entry.js` | 配置三层收敛 · 素材路由（防穿越 / no-store）· `/health` · `/config` · `/state`（诱因板轮询）· `/bond`（GET/PUT，账本唯一写入口）· `/balance`（联合类型） |
-| client | `src/stage/client.js` | **单文件**：契约常量 / 演员（双缓冲 video）/ 世界（位移权威）/ 手势 / 气泡 / 诱因消费 / 关系账本镜像 / 余额档位播报 |
+| client | `src/stage/client.js` | **单文件**：契约常量 / 演员（双缓冲 video）/ **世界（位移权威）** / 手势 / 气泡 / **心智 Mind**（效用打分，决策与推进分离）/ **导演 Director**（动作槽 · 仲裁 · Interaction 四阶段的推进与结算）/ **8 个剧本**（声明式编排表 + 原创文案）/ 诱因消费（**只改心智，不直接点播**）/ 关系账本镜像与防抖提交 / 余额档位播报 |
 
 无构建步骤：引擎按 `package.json` 的 main/exports 直接加载源文件（plain ESM + JSDoc）。
 
