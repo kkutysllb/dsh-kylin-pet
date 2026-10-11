@@ -385,7 +385,7 @@ a.say = (text, ms) => {
 const LINES = Object.freeze({ 'turn-ok': '稳了', 'turn-fail': '让我想想', waiting: '在呢' })
 ```
 
-### Step 3: 分流与响应（`createWorld` 内）
+### Step 3: 分流与响应（`qualified` 在**工厂作用域**；`react` 在 `createWorld` 内）
 
 ```js
 /** 诱因 → 档位 → 资格。waiting 是「双方探头」，不查表。 */
@@ -393,23 +393,17 @@ const STATUS_OF = { 'turn-ok': 'ok', 'turn-fail': 'fail' }
 const CLIP_OF = { 'turn-ok': 'happy', 'turn-fail': 'sad', waiting: 'idle' }
 
 /**
- * 诱因 → 档位 → 资格。waiting 是「双方探头」，不查表。
- *
  * 签名是 `(kind, config)`、位置在**工厂作用域**（不是 createWorld 内）——
  * 这是执行期发现的硬约束：`__kylinContract` 在**工厂装载期**就 freeze 了，
  * 那一刻**根本没有 config**（config 是 start() 里 fetch 来的）。若把 qualified 关在
- * createWorld 里闭包 opts.config，它就不可能又是一个「无 DOM、跨 realm 可调」的纯函数。
+ * createWorld 里闭包 opts.config，它就不可能同时又是一个「无 DOM、跨 realm 可调」的纯函数。
  * 两参形态同时满足两边，且契约上挂的就是**生产用的同一个函数**，不是副本。
  */
-const STATUS_OF = { 'turn-ok': 'ok', 'turn-fail': 'fail' }
-
 function qualified(kind, config) {
   const cast = (config && config.cast) || []
   if (kind === 'waiting') return cast.map((p) => p.id)
   const want = STATUS_OF[kind]
   const map = (config && config.directing && config.directing.workStatus) || {}
-  return cast.filter((p) => (map[p.id] || []).indexOf(want) >= 0).map((p) => p.id)
-}
   return cast.filter((p) => (map[p.id] || []).indexOf(want) >= 0).map((p) => p.id)
 }
 
