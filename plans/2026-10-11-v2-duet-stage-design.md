@@ -305,3 +305,25 @@ V1 起每片结束都要跑：`node --test src/`、`node scripts/check-assets.mj
 ---
 
 **裁决记录（2026-10-11，用户答复「四件事都同意你的建议」）**：① 余额先做 DeepSeek 官方 + 账号两条，其余留扩展点；② 设置页做最小版（关系重置 + 双方状态只读）；③ 纵向位移先做 2D，观感不佳改默认值回退；④ 文件名保留真实日期 `2026-10-11`（仓内 10-12 那批的标签晚一天，不追改已提交文档）。
+
+---
+
+## 14. V3 前置侦察（2026-10-11，Lead 实测）
+
+spec §12 R3 的结论现在明确了，先钉在这里，免得 V3 开工时重新摸：
+
+1. **宿主不提供任何余额面。** 在运行时的 `@deepseek-ai` 全部包里 grep `user/balance` 与 `/balance` —— **零命中**。余额只能是我们自己发起的网络调用，**不能指望宿主给**。
+2. **但「取凭据」这条路是通的**：`launchEnvironmentOf(ctx).get(ref)?.value`（`@deepseek-ai/dsh-launch-environment`）。运行时里有两处真实用法：
+   - `dsh-experimental-translator/lib/types/deepseek.js:126` —— `launchEnvironmentOf(ctx).get(apiKeyRef)?.value.length ?? 0`（判「配没配」的手法：看长度是否为 0）
+   - `dsh-credentials-local/lib/types/index.js:507,516` —— `getFrom(ref, ['process'])` / `getFrom(ref, ['project-env','user-env'])`
+   
+   **注意第二条**：凭据是**有来源分层的**（process / project-env / user-env），取值时要显式给来源列表，不是一锅端。
+3. `ctx.credentials` 的 `describe(ref) → { configured }` 适合做**前置判定**：没配就直接 `unavailable`，省一次网络往返。
+
+**对 V3 计划的直接约束（先定下来）**：
+
+- ledger 的联合类型必须**先有 `unavailable` 分支、再谈取值**（对齐 §11.7「绝不伪造数字」）；
+- 「取不到」的**原因必须分类**（未配凭据 / 网络失败 / HTTP 非 200 / 响应形状不认识）——它们对用户意味着**不同的动作**，糊成一个字符串等于没报；
+- 余额探针必须**可注入**（不注入就只能打真网络，测试里没法跑）；
+- 本机 `DEEPSEEK_API_KEY` 是否在场、DeepSeek 余额接口的确切形状，**留到 V3 计划期用一次真实调用钉死**（与 V2 钉事件名同一手法）。
+
