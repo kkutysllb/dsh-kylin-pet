@@ -108,7 +108,7 @@ GET <PREFIX>/state?since=<seq>
 export const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting'])
 ```
 
-（`test/contract.test.mjs` 补一条：`KINDS.length === 3` 且 `Object.isFrozen(KINDS)`。）
+（`test/contract.test.mjs` 的两条 KINDS 断言**折进既有的**「契约是冻结的（防运行期被改）」那条 —— **不新增 test 块**。这样契约文件仍是 4 条、`state.test.mjs` 7 条，合计 24 + 7 = **31**，与 Step 3 的 Expected 自洽。**若独立成条就是 32**，与本计划的计数对不上 —— 这是执行期发现的计数歧义，处置已定。）
 
 ### Step 2: 写板子
 
@@ -285,6 +285,8 @@ function fakeCtx() {
   }
 }
 ```
+
+> **执行期补充（子代理实测，已采纳）**：上面这块 `fakeCtx` 的 `on()` 返回**空 disposer**（`return () => {}`，只记不摘），所以它能验「派发与计数」，**验不了**「卸载后不再产诱因」—— 真 `ctx.on` 返回的是摘除器。故另写一块行为一致的 `removableCtx()`（`on` 返回真摘除器）**只服务于覆盖项 6**，`fakeCtx` 逐字保留不动。
 
 覆盖：
 1. `agent/turn-stopping` → 板上多一条 `turn-ok`，`detail === ''`；
