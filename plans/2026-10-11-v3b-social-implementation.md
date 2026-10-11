@@ -616,13 +616,17 @@ function deliverStimulus(stimulus) {
 }
 ```
 
-**⚠️ 改名必须同时改两处引用，否则「定义了但接不上」**：
+**⚠️ 改名必须同时处理三处引用 + 一次作用域迁移（漏任何一处都会 TypeError 或 ReferenceError）**
 
-1. `world` 的返回对象（`client.js:651`）：`{ ... bump, react, qualified, ... }` → `react` 改成 `deliverStimulus`；
-2. **唯一的调用点**（`client.js:772`，`/state` 轮询里）：`world.react(s)` → `world.deliverStimulus(s)`。
+旧 `react()` 定义在 `createWorld` **内部**（`client.js:637`）。而 `deliverStimulus` 要读 `minds` —— `minds` 建在 `start()` 里（见 Step 1），**不在 `createWorld` 的作用域内**。所以**不能原地改名**，必须把它**搬到 `start()` 里**（那里同时有 `minds` 和 `world.actors`）：
 
-> 漏掉任何一处，`world.react` 就是 `undefined` —— 每次轮询带回诱因都会 **TypeError**。
-> 旧签名在仓内**只此两点引用**（2026-10-11 已 grep 全仓确认：定义 `:637`、返回对象 `:651`、调用点 `:772`，测试里没有引用）。
+1. **删除** `createWorld` 内的 `react()` 定义（`client.js:637-649`）；
+2. **删除** `world` 返回对象里的 `react` 键（`client.js:651`）—— 不要改名保留，`deliverStimulus` 不再属于世界；
+3. 把 `deliverStimulus` **定义在 `start()` 里**（Step 1 的 `minds` 之后）；
+4. **唯一的调用点**（`client.js:772`，`/state` 轮询里）：`world.react(s)` → **`deliverStimulus(s)`**（不是 `world.deliverStimulus`）。
+
+> 2026-10-11 预检：旧签名在仓内**只此三点引用**（定义 `:637`、返回对象 `:651`、调用点 `:772`），测试里零引用 —— 所以这次搬动是封闭的，没有别的调用方要改。
+> **为什么选「搬出去」而不是「把 minds 传进 createWorld」**：`deliverStimulus` 只碰 `minds` 与 `world.actors` 两样，而 `start()` 两样都有；反过来给世界多塞一个心智依赖，会让「世界只管位移」这条边界变浑。
 
 > **这条改动的可观测差别**：V2 里注入 `agent/error` 会**立刻**看到宠换难过档；V3b 里同一注入只改 `mood`，**下一拍**才由心智决定演什么（可能先安慰、也可能继续散步——取决于 `TUNING`）。
 > **取证必须能分辨这两者**，否则「改成心智了」这句话没有证据（Task 6 的验收句之一就是盯这个）。
