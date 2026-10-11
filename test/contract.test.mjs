@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, BOND, LEDGER_REASONS, BALANCE_TIERS } from '../src/shared/contract.js'
+import { ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, BOND, LEDGER_REASONS, BALANCE_TIERS, INTENTS, TUNING } from '../src/shared/contract.js'
 
 test('路由前缀是注册进 host 的那一个', () => {
   assert.equal(ROUTE_PREFIX, '/dsh-kylin-pet-7341')
@@ -30,4 +30,7 @@ test('契约是冻结的（防运行期被改）', () => {
   assert.ok(BOND.AFFINITY_MIN === -100 && BOND.AFFINITY_MAX === 100)
   assert.ok(LEDGER_REASONS.length === 7 && Object.isFrozen(LEDGER_REASONS))
   assert.equal(BALANCE_TIERS[0][0], '充裕')
+  assert.ok(INTENTS.solo.length === 4 && INTENTS.social.length === 9)
+  assert.equal(Object.keys(TUNING.COOLDOWN_SEC).length, 8)
+  assert.equal(Object.keys(TUNING.EFFECT).length, 9)
 })

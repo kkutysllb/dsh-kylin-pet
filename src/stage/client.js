@@ -40,6 +40,51 @@ window.__ModuleLoader__.load({
     const BALANCE_TIERS = Object.freeze([
       ['充裕', 100], ['健康', 50], ['正常', 20], ['偏低', 5], ['告急', 1], ['见底', 0],
     ])
+    /** 意图族 → 候选。独处 4 个 + 社交 9 个 = 13 个候选（spec §5）。 */
+    const INTENTS = Object.freeze({
+      solo: ['idle', 'walk', 'nap', 'look'],
+      social: ['approach', 'greet', 'gift', 'tease', 'comfort', 'shoulder', 'chase', 'reconcile', 'contest'],
+    })
+    /** 权重与门限。所有魔数只能出现在这里。 */
+    const TUNING = Object.freeze({
+      TICK_SEC: 1,                 // 与 /state 轮询对齐（spec §5：每拍约 1s）
+      SOCIAL_RADIUS: 360,          // px：超出这个距离的社交候选改判为 approach 或淘汰
+      NEAR_RADIUS: 150,            // px：算「已经在旁边」
+      ENERGY_DRAIN: 0.012,         // 每拍衰减
+      ENERGY_RECOVER: 0.02,        // 每拍恢复（sleep 时）
+      MOOD_REGRESS: 0.01,          // 每拍向 0 回归（spec §4.5：缓慢回归）
+      COOLDOWN_SEC: {              // 每个剧本的冷却（**同一对**之间）
+        greet: 45, gift: 120, tease: 90, comfort: 150,
+        shoulder: 180, chase: 90, reconcile: 300, contest: 120,
+      },
+      WEIGHT: {
+        affinity: 0.02,            // 每点 affinity 对社交候选的加成
+        familiarity: 0.01,         // 每点 familiarity 的加成
+        moodMatch: 0.6,            // 候选与 mood 的匹配度
+        energy: 0.8,               // 精力对独处候选的影响
+        distance: 0.4,             // 距离惩罚
+        jitter: 0.15,              // 抖动，防止两只永远同拍
+      },
+      UNLOCK: {                    // spec §7 的解锁条件
+        gift: { familiarity: 3 },
+        tease: { familiarity: 5 },
+        shoulder: { affinity: 20 },
+        reconcile: { affinityMax: -1 },
+      },
+      EFFECT: {                    // spec §7 的关系效果
+        greet: { affinity: 2, familiarity: 1 },
+        gift: { affinity: 3, familiarity: 1 },
+        giftIgnored: { affinity: -1, familiarity: 0 },
+        tease: { affinity: -3, familiarity: 1 },
+        comfort: { affinity: 5, familiarity: 1 },
+        shoulder: { affinity: 3, familiarity: 1 },
+        chase: { affinity: 2, familiarity: 1 },
+        reconcile: { affinity: 8, familiarity: 2 },
+        contest: { affinity: 2, familiarity: 1 },
+      },
+      PHASE_TIMEOUT_SEC: { approach: 6, open: 2, exchange: 6, settle: 2 },
+      MEMORY_MAX: 8,
+    })
     const BOND_FLUSH_MS = 2000      // §4.5：客户端防抖 2s；host 是唯一写者，这里只排队
     const BALANCE_POLL_MS = 30000   // 余额变化慢、还要打外部网络：与 1s 的 /state 分开，频率低一点更礼貌
     /** 气泡文案（原创；client 私有 —— host 不消费，故不进 __kylinContract）。 */
@@ -53,8 +98,10 @@ window.__ModuleLoader__.load({
     // 函数体读的是**调用时**的值 —— readBond() 因此是实时快照，而不是加载时的副本。
     exports.__kylinContract = Object.freeze({
       ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, BOND, BALANCE_TIERS, ANIM_EXT, qualified,
+      INTENTS, TUNING,
       pairId, normalizeBondPair, applyBondEvents, tierOf, tierClip, balanceCue, curiosityOf,
       readBond, queueBondEvent,
+      createMind, stepMind, unlocked, socialGate, chooseIntent,
     })
 
     /* ==================== §2 小工具 ==================== */
@@ -369,6 +416,103 @@ window.__ModuleLoader__.load({
       }
       a.destroy = () => el.remove()
       return a
+    }
+
+    /* ==================== §3.5 心智 Mind（纯逻辑、无 DOM；供导演决策） ==================== */
+    /** 每只宠的心智状态。mood/energy 是连续量，recent 是环形记忆。 */
+    function createMind(petId) {
+      return {
+        petId: petId,
+        mood: 0,            // [-1, 1]
+        energy: 1,          // [0, 1]
+        attention: 'free',  // free | drawn | focused
+        recent: [],         // 最近 MEMORY_MAX 次互动（导演写，心智读）
+        cooldown: {},       // 剧本名 -> 剩余秒
+      }
+    }
+
+    /** 每拍推进：精力衰减 / 恢复、心情向 0 回归、冷却递减。**纯状态推进，不做决策**。 */
+    function stepMind(mind, dt) {
+      const T = TUNING
+      const asleep = mind.energy <= 0.15
+      mind.energy = clamp(mind.energy + (asleep ? T.ENERGY_RECOVER : -T.ENERGY_DRAIN) * dt, 0, 1)
+      mind.mood = clamp(mind.mood - Math.sign(mind.mood) * Math.min(Math.abs(mind.mood), T.MOOD_REGRESS * dt), -1, 1)
+      for (const k of Object.keys(mind.cooldown)) {
+        mind.cooldown[k] = Math.max(0, mind.cooldown[k] - dt)
+        if (mind.cooldown[k] === 0) delete mind.cooldown[k]
+      }
+      return mind
+    }
+
+    /** 解锁判定（spec §7 的「解锁条件」列）。缺条件即恒可用。 */
+    function unlocked(candidate, bond) {
+      const need = TUNING.UNLOCK[candidate]
+      if (!need) return true
+      if (need.familiarity !== undefined && bond.familiarity < need.familiarity) return false
+      if (need.affinity !== undefined && bond.affinity < need.affinity) return false
+      if (need.affinityMax !== undefined && bond.affinity > need.affinityMax) return false
+      return true
+    }
+
+    /**
+     * 门控（spec §5：**门控优先、再加权**）。返回淘汰原因，或 null 表示放行。
+     * 顺序刻意：冷却 → 解锁 → 对方可响应性 → 距离。
+     */
+    function socialGate(candidate, self, other, dist) {
+      if (self.cooldown[candidate]) return 'cooldown'
+      if (!unlocked(candidate, self.bond)) return 'locked'
+      if (!other) return 'no-partner'
+      if (other.held) return 'partner-held'
+      if (other.busy) return 'partner-busy'          // 正在合演
+      if (dist > TUNING.SOCIAL_RADIUS) return candidate === 'approach' ? null : 'too-far'
+      if (candidate === 'comfort' && !(other.mood < -0.3)) return 'no-need'   // spec §7：对方 mood < -0.3
+      if (candidate === 'reconcile' && !(self.bond.affinity < 0)) return 'locked'
+      return null
+    }
+
+    /** 独处候选的打分：energy 低 → nap，mood 高 → walk。 */
+    function soloScore(candidate, self) {
+      const W = TUNING.WEIGHT
+      if (candidate === 'nap') return (1 - self.energy) * W.energy
+      if (candidate === 'walk') return Math.max(0, self.mood) * W.moodMatch
+      if (candidate === 'look') return (1 - Math.abs(self.mood)) * 0.3
+      return 0.4 - Math.abs(self.mood) * 0.1          // idle 兜底
+    }
+
+    /** 社交候选的打分。affinity 越高越愿意社交，距离越远越不愿意。 */
+    function socialScore(candidate, self, other, dist) {
+      const W = TUNING.WEIGHT
+      const bond = self.bond || { affinity: 0, familiarity: 0 }
+      let s = bond.affinity * W.affinity + bond.familiarity * W.familiarity
+      if (candidate === 'comfort') s += Math.max(0, -other.mood) * 1.2      // 对方越难过越想安慰
+      if (candidate === 'tease') s += Math.max(0, self.energy - 0.5) * 1.0
+      if (candidate === 'shoulder') s += Math.max(0, bond.affinity) * 0.02
+      if (candidate === 'approach') s += 0.5                                  // 靠近是社交的兜底
+      s -= (dist / TUNING.SOCIAL_RADIUS) * W.distance
+      return s
+    }
+
+    /**
+     * 选一个意图。返回 `{ intent, family, score, gate }`。
+     * **不修改任何状态**（决策与推进分离，才好测）。
+     */
+    function chooseIntent(self, other, rng) {
+      const T = TUNING
+      const dist = other ? Math.hypot(other.x - self.x, other.y - self.y) : Infinity
+      const cands = []
+      for (const c of INTENTS.solo) cands.push({ intent: c, family: 'solo', gate: null, score: soloScore(c, self) })
+      for (const c of INTENTS.social) {
+        const g = socialGate(c, self, other, dist)
+        cands.push({ intent: c, family: 'social', gate: g, score: g ? -Infinity : socialScore(c, self, other, dist) })
+      }
+      const live = cands.filter((c) => c.gate === null)
+      if (live.length === 0) return { intent: 'idle', family: 'solo', gate: null, score: 0, all: cands }
+      let best = live[0]
+      for (const c of live) {
+        const j = (rng() - 0.5) * T.WEIGHT.jitter
+        if (c.score + j > best.score + (best._j || 0)) { best = c; best._j = j }
+      }
+      return { intent: best.intent, family: best.family, gate: null, score: best.score, all: cands }
     }
 
     /* ==================== §4 世界（唯一位移权威） ==================== */

@@ -60,3 +60,50 @@ export const BALANCE_TIERS = Object.freeze([
 
 export const ANIM_EXT = '.webm'
 export const MEME_EXT = '.png'
+
+/** 意图族 → 候选。独处 4 个 + 社交 9 个 = 13 个候选（spec §5）。 */
+export const INTENTS = Object.freeze({
+  solo: ['idle', 'walk', 'nap', 'look'],
+  social: ['approach', 'greet', 'gift', 'tease', 'comfort', 'shoulder', 'chase', 'reconcile', 'contest'],
+})
+
+/** 权重与门限。所有魔数只能出现在这里。 */
+export const TUNING = Object.freeze({
+  TICK_SEC: 1,                 // 与 /state 轮询对齐（spec §5：每拍约 1s）
+  SOCIAL_RADIUS: 360,          // px：超出这个距离的社交候选改判为 approach 或淘汰
+  NEAR_RADIUS: 150,            // px：算「已经在旁边」
+  ENERGY_DRAIN: 0.012,         // 每拍衰减
+  ENERGY_RECOVER: 0.02,        // 每拍恢复（sleep 时）
+  MOOD_REGRESS: 0.01,          // 每拍向 0 回归（spec §4.5：缓慢回归）
+  COOLDOWN_SEC: {              // 每个剧本的冷却（**同一对**之间）
+    greet: 45, gift: 120, tease: 90, comfort: 150,
+    shoulder: 180, chase: 90, reconcile: 300, contest: 120,
+  },
+  WEIGHT: {
+    affinity: 0.02,            // 每点 affinity 对社交候选的加成
+    familiarity: 0.01,         // 每点 familiarity 的加成
+    moodMatch: 0.6,            // 候选与 mood 的匹配度
+    energy: 0.8,               // 精力对独处候选的影响
+    distance: 0.4,             // 距离惩罚
+    jitter: 0.15,              // 抖动，防止两只永远同拍
+  },
+  UNLOCK: {                    // spec §7 的解锁条件
+    gift: { familiarity: 3 },
+    tease: { familiarity: 5 },
+    shoulder: { affinity: 20 },
+    reconcile: { affinityMax: -1 },
+  },
+  EFFECT: {                    // spec §7 的关系效果
+    greet: { affinity: 2, familiarity: 1 },
+    gift: { affinity: 3, familiarity: 1 },
+    giftIgnored: { affinity: -1, familiarity: 0 },
+    tease: { affinity: -3, familiarity: 1 },
+    comfort: { affinity: 5, familiarity: 1 },
+    shoulder: { affinity: 3, familiarity: 1 },
+    chase: { affinity: 2, familiarity: 1 },
+    reconcile: { affinity: 8, familiarity: 2 },
+    contest: { affinity: 2, familiarity: 1 },
+  },
+  PHASE_TIMEOUT_SEC: { approach: 6, open: 2, exchange: 6, settle: 2 },
+  MEMORY_MAX: 8,
+})

@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import * as host from '../src/shared/contract.js'
 
-const SHARED_KEYS = ['ROUTE_PREFIX', 'ASSET', 'CLIPS', 'LOOPING', 'KINDS', 'BOND', 'BALANCE_TIERS', 'ANIM_EXT']
+const SHARED_KEYS = ['ROUTE_PREFIX', 'ASSET', 'CLIPS', 'LOOPING', 'KINDS', 'BOND', 'BALANCE_TIERS', 'ANIM_EXT', 'INTENTS', 'TUNING']
+// INTENTS / TUNING 由 V3b Task 1 引入：**必须在这里**，否则 client 的镜像可以静默漂移 ——
+// 上一轮子代理用手工脚本验过相等，但手工验证不是门。（2026-10-11 由子代理 B 项指出。）
 
 /** JSON 归一化 + 键排序：跨 realm 对象不能直接 deepStrictEqual。 */
 function canon(value) {
