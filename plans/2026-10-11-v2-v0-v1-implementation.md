@@ -1596,16 +1596,44 @@ git commit -m 'test(v1): 真浏览器取证（双宠同框/点击/拖到一起/�
 "compatibility": { "dshReleases": { "0.2.0-rc.1": "compatible", "0.2.0-rc.2": "compatible", "0.2.1-alpha.2": "compatible" } }
 ```
 
-- [ ] **Step 2: 实机安装（这一条我替你跑不了，需要你点头）**
+- [ ] **Step 2: 实机安装（**必须用户本人执行**，理由见 2.2）**
+
+#### 2.1 这一步到底改什么（Lead 已查清，2026-10-11）
+
+`dsh plugin --help` 原文：*manage a profile's plugins by **forwarding the remaining arguments to pnpm** in the profile directory*。所以完整动作是**两件独立的事**：
+
+| # | 动作 | 改什么 | 要不要重启 |
+|---|---|---|---|
+| A | `dsh plugin --profile web add file:/Users/libing/kk_Projects/dsh-kylin-pet` | profile 的 `package.json` 的 `dependencies` + `node_modules` | **不用** |
+| B | 在 `package.json` 的 `dsh.profile.bundles[]` 里加一行 `"dsh-kylin-pet"` | 引擎**启动时**的 bundle 装配列表 | **要** |
+
+**A 是安全的**（一次 pnpm add，不碰装配列表、不重启）；**B 才是生效那一步**。
+
+#### 2.2 ⚠️ Lead **不能**自己做 B：重启会杀掉这个会话
+
+本会话的运行时就是 `DSH_HOME=/Users/libing/.kcoder` 的 `web` profile —— 它的 `package.json` 里列着 `dsh-super-ppts` / `dsh-animations` / `dsh-kylin-memory` 等**我们此刻正在用的插件**。**重启 web profile 的引擎 = 杀掉 Lead 自己的会话**，所以 B 只能由用户在自己方便的时间点执行。
+
+#### 2.3 可逆转的操作（照抄即可，撤销路径同样明确）
 
 ```bash
-# 装进 web profile（file: 指向本仓）
-dsh plugin --profile web add file:/Users/libing/kk_Projects/dsh-kylin-pet
-# 起引擎（web profile）
-dsh web
+P=~/.kcoder/profiles/web/package.json
+cp "$P" "$P.bak-$(date +%Y%m%d-%H%M%S)"      # 先备份，撤销有据可依
+
+dsh plugin --profile web add file:/Users/libing/kk_Projects/dsh-kylin-pet   # A：装包（安全）
+# B：把 "dsh-kylin-pet" 追加进 dsh.profile.bundles[]（一行编辑）
+
+dsh web                                        # 起引擎（会重启当前 profile）
 ```
 
-Expected：引擎日志出现 `[dsh-kylin-pet] kylinzi + xisha @ /dsh-kylin-pet-7341`，页面出现两只宠。若插件条目 pending/激活失败，先 `curl http://127.0.0.1:<端口>/dsh-kylin-pet-7341/health` 定位是「路由没挂上」还是「client 没跑起来」。
+撤销：`dsh plugin --profile web remove dsh-kylin-pet` + 从 `bundles[]` 删掉那一行（或直接还原备份）。
+
+#### 2.4 验收句与定位顺序
+
+Expected：引擎日志出现 `[dsh-kylin-pet] kylinzi + xisha @ /dsh-kylin-pet-7341`，页面出现两只宠。**若没出现**，按下面顺序逐步排除（每一步都要能排除掉一个原因）：
+
+1. `curl http://127.0.0.1:<端口>/dsh-kylin-pet-7341/health` —— **通** ⇒ 宿主半边挂上了；**不通** ⇒ bundle 没进装配列表（回看 B）。
+2. health 通但页面无宠 ⇒ **client 半边**没跑起来，看浏览器控制台。这一条正是「V1 取证记录」末尾标注的**唯一未证明环节**（真加载器 + 真插件激活层）。
+3. 控制台报 `require is not defined` ⇒ 工厂形参漏了（我们已按契约写 `factory: (require)`，但要眼见为实）。
 
 - [ ] **Step 3: README 勾选**
 
