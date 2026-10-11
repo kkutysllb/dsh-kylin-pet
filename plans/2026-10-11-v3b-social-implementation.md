@@ -109,6 +109,8 @@ export const TUNING = Object.freeze({
 
 Run: `npm test` → Expected: **84 pass / 0 fail**（V3 结束时的 84，计数不变）。
 
+> ⚠️ **基线推移修正（2026-10-11）**：本 Task 执行时基线仍是 84；T2 之后基线变为 **97**（我并发提交的 `test/bible.test.mjs` 带来 3 例）。**T1 本身不需要修正。**）
+
 ---
 
 ## Task 2: 心智 Mind（`src/stage/client.js` 新增 §Mind；`test/mind.test.mjs`）
@@ -228,6 +230,8 @@ function chooseIntent(self, other, rng) {
 5. **注入固定 rng 时结果可复现**（同输入两次调用同输出）—— 这条是「决策可测」的地基。
 
 Run: `npm test` → Expected: **94 pass / 0 fail**（84 + 10）。
+
+> ⚠️ **基线推移修正**：执行时基线已是 **97**，故实际应为 **97 + 10 = 107**？**不是。** —— T2 实测全量为 **97**、增量为 **10**、**排除 `bible.test.mjs` 后为 94**。本 Task 认的是**增量 10**，绝对数受并发提交影响。**以后一律以增量为准。**）
 
 ---
 
@@ -398,7 +402,7 @@ function createDirector(opts) {
 5. `freePartner` 不会返回**被拎起**或 `busy` 的宠；
 6. `settle` 调用了注入的 `stick`（账本写入是**经由**它的，导演不自己发请求）。
 
-Run: `npm test` → Expected: **103 pass / 0 fail**（94 + 9）。
+Run: `npm test` → Expected: **106 pass / 0 fail**（97 + 9）。原写「103（94 + 9）」是按旧基线；**基数已推移到 97**。）
 
 ---
 
@@ -537,7 +541,7 @@ const ADVANCE = {
 5. **解锁条件与 spec §7 对得上**：`gift` 要 `familiarity>=3`、`tease` 要 `>=5`、`shoulder` 要 `affinity>=20`、`reconcile` 要 `affinity<0`（与 `TUNING.UNLOCK` 交叉核对）；
 6. **效果与 spec §7 对得上**：`reconcile` 的 affinity 增量是 **8**（最大的那个，别抄错）；`tease` 是 **−3**；`giftIgnored` 是 **−1**。
 
-Run: `npm test` → Expected: **114 pass / 0 fail**（103 + 11）。
+Run: `npm test` → Expected: **117 pass / 0 fail**（106 + 11）。原写「114（103 + 11）」是按旧基线。）
 
 ---
 
@@ -644,7 +648,7 @@ function deliverStimulus(stimulus) {
 4. **`settle` 走的是注入的 `onStimulus`**（桩函数被调一次、参数里有 `pair/kind/affinityDelta`）；
 5. **冷却生效**：同一剧本 settle 两次，第二次被 `socialGate` 以 `cooldown` 淘汰。
 
-Run: `npm test` → Expected: **124 pass / 0 fail**（114 + 10）。
+Run: `npm test` → Expected: **127 pass / 0 fail**（117 + 10）。原写「124（114 + 10）」是按旧基线。）
 
 ---
 
