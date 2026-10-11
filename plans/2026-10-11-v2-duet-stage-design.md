@@ -262,7 +262,13 @@ tools/harness.mjs    开发期：起一个免鉴权页面加载 client.js（stub
 | **V3 双宠社交** | 心智 / 导演 / 8 剧本 / 关系账本 | 剧本触发一次且冷却生效；账本跨会话存活；harness 截图取证 |
 | **V4 收口** | 设置页 + `docs/character-bible.md` 文案全量 + 路线图更新 | 设置保存即时生效；文案 100% 原创 |
 
-V1 起每片结束都要跑：`node --test src/`、`node scripts/check-assets.mjs assets/pet`、真浏览器 harness 截图。
+V1 起每片结束都要跑：`npm test`、`node scripts/check-assets.mjs assets/pet/main-animation assets/pet/whale-animation`、真浏览器 harness 截图。
+
+> **⚠️ 这两条命令的原始形态（`node --test src/` 与 `node scripts/check-assets.mjs assets/pet`）在执行期被证明是错的**，2026-10-11 在此更正：
+> - `node --test src/`：路径是 V1 之前的旧布局；且 **Node v24 起 `--test` 不再递归展开目录位置参数**（会当成单个测试文件跑，必红）。正确形态是 `npm test`（= `node --test "test/**/*.test.mjs"`）。
+> - `node scripts/check-assets.mjs assets/pet`：`collect()` **不是递归的**，传父目录会 exit 2。必须逐个子目录传。
+>
+> 教训：**规范章节里的命令也必须被真的跑过** —— 这两条躺在「每片结束都要跑」的位置上，却一次都没跑通过。
 
 ---
 

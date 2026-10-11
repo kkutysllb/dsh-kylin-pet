@@ -233,7 +233,7 @@ Expected: 第一跑 `FAIL 特征串：源码面命中 1 处` + `src/_negcontrol.
 - [ ] **V3 双宠社交**：心智 / 导演 / 8 个互动剧本 / 关系账本（跨会话）
 - [ ] **V4 收口**：设置页（关系重置 + 只读状态）· 角色设定集 · 鲸鱼娘表情包差分
 
-设计文档：[plans/2026-10-11-v2-duet-stage-design.md](plans/2026-10-11-v2-duet-stage-design.md)
+设计文档：[2026-10-11-v2-duet-stage-design.md](2026-10-11-v2-duet-stage-design.md)
 ```
 
 - [ ] **Step 2: 核对没有残留的假勾**
