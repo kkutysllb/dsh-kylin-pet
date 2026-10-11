@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import * as host from '../src/shared/contract.js'
 
-const SHARED_KEYS = ['ROUTE_PREFIX', 'ASSET', 'CLIPS', 'LOOPING', 'ANIM_EXT']
+const SHARED_KEYS = ['ROUTE_PREFIX', 'ASSET', 'CLIPS', 'LOOPING', 'KINDS', 'ANIM_EXT']
 
 /** JSON 归一化 + 键排序：跨 realm 对象不能直接 deepStrictEqual。 */
 function canon(value) {

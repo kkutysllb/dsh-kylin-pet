@@ -28,12 +28,15 @@ window.__ModuleLoader__.load({
       happy: ['点击开心', '开心跳跃', '庆祝成功', '余额健康', '余额充裕', '余额正常'],
     })
     const LOOPING = Object.freeze(['idle', 'walk'])
+    const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting'])
+    /** 气泡文案（原创；client 私有 —— host 不消费，故不进 __kylinContract）。 */
+    const LINES = Object.freeze({ 'turn-ok': '稳了', 'turn-fail': '让我想想', waiting: '在呢' })
     const ANIM_EXT = '.webm'
     const STAGE_ID = 'dsh-kylin-pet-stage'
     const DROP_DISTANCE = 120   // spec §8：拖到一起放下即触发一次近距离互动
 
     exports.inject = []
-    exports.__kylinContract = Object.freeze({ ROUTE_PREFIX, ASSET, CLIPS, LOOPING, ANIM_EXT })
+    exports.__kylinContract = Object.freeze({ ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, ANIM_EXT, qualified })
 
     /* ==================== §2 小工具 ==================== */
     const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
@@ -54,6 +57,21 @@ window.__ModuleLoader__.load({
     const pick = (list, rng) => list[Math.floor(rng() * list.length)]
     const animUrl = (pet, name) =>
       ROUTE_PREFIX + '/pet/' + encodeURIComponent(pet.id) + '/' + encodeURIComponent(name + ANIM_EXT)
+
+    /** 诱因 -> 档位。waiting 是「双方探头」，不查表。 */
+    const STATUS_OF = { 'turn-ok': 'ok', 'turn-fail': 'fail' }
+
+    /**
+     * 诱因 -> 有资格的宠 id（纯函数、无 DOM）。
+     * 刻意放工厂作用域而非 createWorld 内：挂上 __kylinContract 才能被跨 realm 单测钉住。
+     */
+    function qualified(kind, config) {
+      const cast = (config && config.cast) || []
+      if (kind === 'waiting') return cast.map((p) => p.id)
+      const want = STATUS_OF[kind]
+      const map = (config && config.directing && config.directing.workStatus) || {}
+      return cast.filter((p) => (map[p.id] || []).indexOf(want) >= 0).map((p) => p.id)
+    }
 
     /* ==================== §3 演员 ==================== */
     function createActor(pet) {
@@ -96,9 +114,26 @@ window.__ModuleLoader__.load({
       hit.style.top = (ASSET.CHAR_TOP * 100) + '%'
       hit.style.height = ((ASSET.FOOT_RATIO - ASSET.CHAR_TOP) * 100) + '%'
 
+      // 气泡：角色上方的对白层，永远不吃事件（命中区才是唯一入口）
+      const bubble = document.createElement('div')
+      bubble.style.position = 'absolute'
+      bubble.style.left = '50%'
+      bubble.style.top = '-4%'
+      bubble.style.transform = 'translate(-50%,-100%)'
+      bubble.style.padding = '3px 9px'
+      bubble.style.borderRadius = '11px'
+      bubble.style.background = 'rgba(18,22,30,0.88)'
+      bubble.style.color = '#eaf1fa'
+      bubble.style.font = '500 13px/1.4 system-ui, sans-serif'
+      bubble.style.whiteSpace = 'nowrap'
+      bubble.style.pointerEvents = 'none'
+      bubble.style.opacity = '0'
+      bubble.style.transition = 'opacity 160ms ease'
+
       el.appendChild(vids[0])
       el.appendChild(vids[1])
       el.appendChild(hit)
+      el.appendChild(bubble)
 
       const a = {
         pet: pet, el: el, hit: hit, box: { w: w, h: h },
@@ -136,6 +171,15 @@ window.__ModuleLoader__.load({
           vids[a.front].pause()
           a.front = 1 - a.front
         }, () => { /* 素材缺失不该打断舞台：静默保留上一帧 */ })
+      }
+
+      /** 冒一句对白；ms 到点自动淡出。空文案当「不说」——别把气泡点亮成空气泡。 */
+      a.say = (text, ms) => {
+        if (!text) return
+        bubble.textContent = text
+        bubble.style.opacity = '1'
+        if (a.sayTimer) clearTimeout(a.sayTimer)
+        a.sayTimer = setTimeout(() => { bubble.style.opacity = '0' }, ms || 2200)
       }
 
       for (const v of vids) {
@@ -263,7 +307,25 @@ window.__ModuleLoader__.load({
         b.next = rand(2, 4)
       }
 
-      return { actors: actors, step: step, separate: separate, nearest: nearest, bump: bump, W: W, H: H }
+      /** 诱因 -> 播哪档（waiting 双方探头，只播 idle）。 */
+      const CLIP_OF = { 'turn-ok': 'happy', 'turn-fail': 'sad', waiting: 'idle' }
+
+      /** V2 占位：有资格就演。V3 起由 Mind 打分决定「要不要响应」——别把这里当最终形态。 */
+      function react(stimulus) {
+        if (!stimulus || KINDS.indexOf(stimulus.kind) < 0) return []
+        const acted = []
+        for (const id of qualified(stimulus.kind, opts.config)) {
+          const a = actors.find((x) => x.pet.id === id)
+          if (!a || a.held) continue
+          a.say(LINES[stimulus.kind])
+          a.play(CLIP_OF[stimulus.kind])
+          a.next = rand(2, 4)
+          acted.push(id)
+        }
+        return acted
+      }
+
+      return { actors: actors, step: step, separate: separate, nearest: nearest, bump: bump, react: react, qualified: qualified, W: W, H: H }
     }
 
     /* ==================== §5 手势 ==================== */
@@ -369,6 +431,23 @@ window.__ModuleLoader__.load({
         requestAnimationFrame(frame)
       }
       requestAnimationFrame(frame)
+      // 诱因轮询：1s 一拍（手调值，V4 需要再加配置项）。后台标签页照轮 —— 诱因不该因切标签丢掉。
+      let since = null   // null = 还没学水位
+      const poll = async () => {
+        try {
+          const q = since === null ? '' : '?since=' + since
+          const res = await fetch(ROUTE_PREFIX + '/state' + q, { cache: 'no-store' })
+          if (!res.ok) return
+          const body = await res.json()
+          const cur = Number(body && body.cursor)
+          if (!Number.isFinite(cur)) return
+          if (since !== null && cur < since) since = null      // host 重启：水位回退，重新起步
+          for (const s of (body && body.stimuli) || []) world.react(s)
+          since = cur
+        } catch (err) { /* 宿主不在时静默：桌宠不该刷屏 */ }
+      }
+      setInterval(poll, 1000)
+      poll()
       console.info('[dsh-kylin-pet] 舞台已就绪：' + config.cast.map((p) => p.id).join(' + '))
     }
 
