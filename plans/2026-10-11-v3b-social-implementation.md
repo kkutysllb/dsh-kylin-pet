@@ -547,16 +547,13 @@ Run: `npm test` → Expected: **117 pass / 0 fail**（106 + 11）。原写「114
 
 ## Task 4b: **阶段执行器**（补 Task 3/4 缺掉的一整块 —— **没有它，V3b 跑不起来**）
 
-**Files:** Modify `src/stage/client.js`、**Modify `test/director.test.mjs`**；Create `test/phase.test.mjs`
+**Files:** Modify `src/stage/client.js`；Create `test/phase.test.mjs`
 
-> **⚠️ 为什么必须动 `test/director.test.mjs`**（2026-10-11 执行期发现）：Task 3/4 落下的一条断言是**逐字段比较 `duet` 对象**的：
+> **曾经的顾虑与它的结局**（2026-10-11 执行期）：Step 2 原本要求给 `duet` 加 `sincePhase`，而 Task 3 落下的 `test/director.test.mjs` 里有一条**逐字段比较 `duet` 对象**的断言（`canon` 钉死形状）—— 加字段就会打红它。当时 Lead 的处置是「把该测试文件纳入本 Task 写入范围，往期望对象里补 `sincePhase: 0`」。
 >
-> ```
-> expected: {"at":0,"deadline":6,"initiator":"kylinzi","kind":"greet","outcome":null,"phase":"approach","responder":"xisha"}
-> actual:   {... 同样的内容 ..., "sincePhase":0}
-> ```
+> **实际执行时选了更好的解法**（见 Step 2 的修正）：`open()` 不加字段，`sincePhase` 由 `runDuet` 惰性补上。于是那条断言**一个字都不用改**，它的判别力完整保留。**本 Task 因此不需要动 `test/director.test.mjs`。**
 >
-> 而 Step 2 恰恰要求给 `duet` 加 `sincePhase` —— **这是本 Task 自己造成的破坏**，修它是本 Task 的一部分，不是越界。修法：在那条断言的期望对象里补上 `sincePhase: 0`（**不要**改成忽略未知键 —— 那样这条断言就失去「不多不少」的判别力了）。
+> 记在这里是因为：**「把测试改成迁就实现」应当是最后手段**。当冲突来自「新字段 vs 钉死形状的断言」时，先问一句「这个字段真的属于那个对象吗」—— `sincePhase` 属于阶段推进，不属于开场，所以它不该进 `open()` 的返回值。
 
 ### 为什么有这一节
 
