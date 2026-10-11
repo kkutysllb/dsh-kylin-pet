@@ -31,5 +31,8 @@ export const CLIPS = Object.freeze({
 /** 循环播放的档（其余为一次性，播完回 idle）。 */
 export const LOOPING = Object.freeze(['idle', 'walk'])
 
+/** 诱因种类：host 产、client 消费。client 逐字镜像一份，由一致性测试钉死。 */
+export const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting'])
+
 export const ANIM_EXT = '.webm'
 export const MEME_EXT = '.png'

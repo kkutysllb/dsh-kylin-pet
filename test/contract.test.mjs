@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ROUTE_PREFIX, ASSET, CLIPS, LOOPING } from '../src/shared/contract.js'
+import { ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS } from '../src/shared/contract.js'
 
 test('路由前缀是注册进 host 的那一个', () => {
   assert.equal(ROUTE_PREFIX, '/dsh-kylin-pet-7341')
@@ -25,4 +25,6 @@ test('契约是冻结的（防运行期被改）', () => {
   assert.throws(() => { ASSET.W = 1 }, TypeError)
   assert.throws(() => { CLIPS.idle = [] }, TypeError)
   assert.ok(LOOPING.length === 2 && LOOPING.includes('idle') && LOOPING.includes('walk'))
+  assert.equal(KINDS.length, 3)
+  assert.ok(Object.isFrozen(KINDS))
 })
