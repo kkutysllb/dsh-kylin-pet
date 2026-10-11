@@ -612,18 +612,28 @@ function deliverStimulus(stimulus) {
 }
 ```
 
+**⚠️ 改名必须同时改两处引用，否则「定义了但接不上」**：
+
+1. `world` 的返回对象（`client.js:651`）：`{ ... bump, react, qualified, ... }` → `react` 改成 `deliverStimulus`；
+2. **唯一的调用点**（`client.js:772`，`/state` 轮询里）：`world.react(s)` → `world.deliverStimulus(s)`。
+
+> 漏掉任何一处，`world.react` 就是 `undefined` —— 每次轮询带回诱因都会 **TypeError**。
+> 旧签名在仓内**只此两点引用**（2026-10-11 已 grep 全仓确认：定义 `:637`、返回对象 `:651`、调用点 `:772`，测试里没有引用）。
+
 > **这条改动的可观测差别**：V2 里注入 `agent/error` 会**立刻**看到宠换难过档；V3b 里同一注入只改 `mood`，**下一拍**才由心智决定演什么（可能先安慰、也可能继续散步——取决于 `TUNING`）。
 > **取证必须能分辨这两者**，否则「改成心智了」这句话没有证据（Task 6 的验收句之一就是盯这个）。
 
-### Step 4: 点击的「好奇凑过来」用真 affinity（去掉 V1 写死的 50%）
+### Step 4:（**已被 V3 提前完成 —— 本步只核对，不要重写**）
 
-V1 的 `release()` 里是 `Math.random() < 0.5`。改成：
-
-```js
-const bond = minds[a.pet.id].bond || { affinity: 0, familiarity: 0 }
-const p = clamp(0.5 + bond.affinity / 200, 0.05, 0.95)   // affinity 越高越愿意凑过来
-if (mate && !mate.held && Math.random() < p) { … }
-```
+> **2026-10-11 预检发现本步是陈旧的**：V3 的 Task 5 已经把它做了 —— `client.js` 里已有 `curiosityOf(affinity)`，且 `release()` 里已经是：
+>
+> ```js
+> if (mate && !mate.held && Math.random() < curiosityOf(bondState.affinity)) { ... }
+> ```
+>
+> 差别只在数据来源：计划写的是 `minds[a.pet.id].bond.affinity`，V3 实际用的是 `bondState.affinity`（client 的账本镜像）—— **两者是同一个值**（V3 的 Task 5 已把镜像与账本对齐）。
+>
+> **本步的正确做法**：`grep` 确认 `curiosityOf` 在用即可，**不要再改 `release()`** —— 那不是本片的工作，重写只会覆盖 V3 已验收的代码。
 
 ### Step 5: 测试 `test/client-v3b.test.mjs`
 
