@@ -42,6 +42,7 @@ const C = loadContract()
 function mkActor(id, x, y) {
   const a = {
     pet: { id: id }, held: false, busy: false, x: x, y: y, facing: 1, target: null, clip: null,
+    box: { w: 280, h: 157.5 },   // 真实演员有这个（separate() 与 move:'apart' 都读它），替身不能少
     plays: [], says: [],
     play: (clip) => { a.clip = clip; a.plays.push(clip) },
     setFacing: (f) => { a.facing = f },
@@ -358,4 +359,130 @@ test('数值不变式：near / veryNear 的门槛必须大于世界强制的最�
     'veryNear(' + C.TUNING.NEAR_RADIUS * 0.6 + ') 必须 > minGap(' + minGap + ')，否则 veryNear 恒假')
   assert.ok(C.TUNING.NEAR_RADIUS < C.TUNING.SOCIAL_RADIUS, 'near 必须比 too-far 更近')
 })
+/* ==================== Task 5b：who / move 真的被消费（Step 3 的六条） ==================== */
+
+/**
+ * 推进到**某个阶段的第一拍**为止 —— 即该阶段的 enterPhase 已经跑过。
+ * 既有的 drive() 只保证「整场走完」，看不到某一个阶段的动作落点；而本 Task 量的正是那个落点。
+ */
+function driveInto(d, want, maxFrames) {
+  let frames = 0
+  while (d.duet && d.duet.phase !== want && frames < maxFrames) { d.step(1 / 60); frames++ }
+  if (!d.duet || d.duet.phase !== want) return false
+  d.step(1 / 60)                       // 进入该阶段的第一拍：enterPhase 正是在这一拍执行
+  return true
+}
+
+test('Task5b·1 who=responder：动作播在**对方**身上，发起方不播（tease 的 sad / comfort 的 happy）', () => {
+  // 计划原文写「comfort 的 sad」，但 SCRIPTS 里 comfort.exchange 的档是 happy（Task 4 的表），
+  // sad + who:responder 实际在 tease.exchange。两个都测：免得「按剧本名找档」找错对象。
+  const cases = [
+    { kind: 'tease', clip: 'sad' },
+    { kind: 'comfort', clip: 'happy' },
+  ]
+  for (const c of cases) {
+    const s = mkScene()
+    assert.ok(s.d.open(s.A, s.B, c.kind, 0), c.kind + ' 必须能开场')
+    assert.ok(driveInto(s.d, 'exchange', 1000), c.kind + ' 必须走到 exchange')
+    console.log('[phase.test] ' + c.kind + '.exchange：A.clip=' + s.A.clip + ' B.clip=' + s.B.clip)
+    assert.equal(s.B.clip, c.clip, c.kind + '：' + c.clip + ' 必须播在**对方**（who:responder）身上')
+    assert.notEqual(s.A.clip, c.clip,
+      c.kind + '：发起方不许也播 ' + c.clip + '（表里写 responder、代码做 A，正是本 Task 要修的 bug）')
+  }
+})
+
+test('Task5b·2 没有 who 的阶段：动作仍归发起方（greet.open 的 turn）', () => {
+  const s = mkScene()
+  assert.ok(s.d.open(s.A, s.B, 'greet', 0))
+  assert.ok(driveInto(s.d, 'open', 1000), 'greet 必须走到 open')
+  console.log('[phase.test] greet.open：A.clip=' + s.A.clip + ' B.clip=' + s.B.clip)
+  assert.equal(s.A.clip, 'turn', '默认（没有 who）必须仍播在发起方')
+  assert.notEqual(s.B.clip, 'turn', '没有 who 时不许把动作甩给对方')
+})
+
+test('Task5b·3 contest：duet.winner 真的产生，happy 只归胜者（两种布局）', () => {
+  // 「先到者得」（spec §7）：进入 approach 结束时**距目标更近**的那只。
+  // 摆位法：contest 的 approach 是 move:'point' ⇒ 两只 target 都指向中点，
+  // 于是「距目标远近」就是「离中点的远近」，可以直接按坐标摆出来。
+  const layouts = [
+    { name: 'A 更近', da: 4, db: 120, win: 'kylinzi' },
+    { name: 'B 更近', da: 120, db: 4, win: 'xisha' },
+  ]
+  for (const L of layouts) {
+    const s = mkScene(undefined, 300)
+    assert.ok(s.d.open(s.A, s.B, 'contest', 0))
+    s.d.step(1 / 60)                                   // approach 的 enterPhase：target = 中点
+    const mid = { x: (s.A.x + s.B.x) / 2, y: (s.A.y + s.B.y) / 2 }
+    s.A.x = mid.x - L.da
+    s.B.x = mid.x + L.db                               // 只动位置，不动 target
+    assert.ok(driveInto(s.d, 'open', 1000), L.name + '：必须走到 open（winner 在推进那一拍写入）')
+    console.log('[phase.test] contest(' + L.name + ')：duet.winner=' + s.d.duet.winner)
+    assert.equal(s.d.duet.winner, L.win, L.name + '：winner 必须等于距目标更近的那只')
+    assert.ok(driveInto(s.d, 'exchange', 1000), L.name + '：必须走到 exchange')
+    const winner = L.win === 'kylinzi' ? s.A : s.B
+    const loser = L.win === 'kylinzi' ? s.B : s.A
+    console.log('[phase.test] contest(' + L.name + ') exchange：胜者 clip=' + winner.clip + ' 败者 clip=' + loser.clip)
+    assert.equal(winner.clip, 'happy', L.name + '：先到者得 —— happy 必须播在胜者身上')
+    assert.notEqual(loser.clip, 'happy', L.name + '：败者不该也一起乐（who 是独占的，不是「再加上一个」）')
+  }
+})
+
+test('Task5b·4 move=apart：两只的 target 方向相反、幅度相同（各自退开）', () => {
+  const s = mkScene()
+  assert.ok(s.d.open(s.A, s.B, 'shoulder', 0))
+  assert.ok(driveInto(s.d, 'settle', 3000), 'shoulder 必须走到 settle')
+  console.log('[phase.test] shoulder.settle target：A=' + canon(s.A.target) + ' B=' + canon(s.B.target))
+  assert.ok(s.A.target && s.B.target, 'move:apart 必须给两只都设 target（修正前 settle 是 no-op）')
+  const ax = s.A.target.x - s.A.x
+  const bx = s.B.target.x - s.B.x
+  assert.ok(ax !== 0 && bx !== 0, 'apart 必须真的挪位置，实际 A=' + ax + ' B=' + bx)
+  assert.notEqual(Math.sign(ax), Math.sign(bx), '一只向左、一只向右 —— 方向必须相反')
+  assert.equal(Math.abs(ax), Math.abs(bx), '退开的幅度必须相同（同一个 back）')
+  assert.equal(s.A.target.y, s.A.y, 'apart 只改 x，不动 y')
+  assert.equal(s.B.target.y, s.B.y, 'apart 只改 x，不动 y')
+})
+
+test('Task5b·5 move=point：两只的 target 相同且等于两点中点', () => {
+  const s = mkScene(undefined, 300)
+  assert.ok(s.d.open(s.A, s.B, 'contest', 0))
+  s.d.step(1 / 60)                                     // approach 的 enterPhase
+  const mid = { x: (s.A.x + s.B.x) / 2, y: (s.A.y + s.B.y) / 2 }
+  console.log('[phase.test] contest.approach target：A=' + canon(s.A.target) + ' B=' + canon(s.B.target) + ' mid=' + canon(mid))
+  assert.equal(canon(s.A.target), canon(mid), 'A 的目标必须是中点')
+  assert.equal(canon(s.B.target), canon(mid), 'B 的目标必须是**同一个**中点')
+})
+
+test('Task5b·6 反向对账：SCRIPTS 声明的 who / move 与 enterPhase 认的集合必须互相覆盖', () => {
+  // 计划 Step 3 第 6 条：防的是「将来新加的第 7 处声明却没实现」，不是今天的 5 处。
+  // 这两张表是**手写**白名单：它就是「enterPhase 到底认哪些值」的声明。
+  // 新增一个 who/move 取值，必须同时改 enterPhase 与这张表 —— 少改一边这条测试就红。
+  const WHO_HANDLED = ['responder', 'winner']
+  const MOVE_HANDLED = ['toward', 'apart', 'point']
+  const seenWho = []
+  const seenMove = []
+  for (const kind of Object.keys(C.SCRIPTS)) {
+    const phases = C.SCRIPTS[kind].phases || {}
+    for (const p of Object.keys(phases)) {
+      const spec = phases[p]
+      if (spec.who && seenWho.indexOf(spec.who) < 0) seenWho.push(spec.who)
+      if (spec.move && seenMove.indexOf(spec.move) < 0) seenMove.push(spec.move)
+    }
+  }
+  console.log('[phase.test] SCRIPTS 里出现的 who = ' + JSON.stringify(seenWho) + '，move = ' + JSON.stringify(seenMove))
+  for (const v of seenWho) {
+    assert.ok(WHO_HANDLED.indexOf(v) >= 0,
+      'SCRIPTS 声明了 who:' + v + '，而 enterPhase 不认它 —— 声明要么被执行、要么被删掉')
+  }
+  for (const v of seenMove) {
+    assert.ok(MOVE_HANDLED.indexOf(v) >= 0,
+      'SCRIPTS 声明了 move:' + v + '，而 enterPhase 不认它 —— 声明要么被执行、要么被删掉')
+  }
+  for (const v of WHO_HANDLED) {
+    assert.ok(seenWho.indexOf(v) >= 0, 'enterPhase 认 who:' + v + '，但没有任何剧本用它（死分支）')
+  }
+  for (const v of MOVE_HANDLED) {
+    assert.ok(seenMove.indexOf(v) >= 0, 'enterPhase 认 move:' + v + '，但没有任何剧本用它（死分支）')
+  }
+})
+
 

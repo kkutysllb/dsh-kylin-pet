@@ -674,11 +674,21 @@ window.__ModuleLoader__.load({
         return s && s.phases ? (s.phases[phase] || null) : null
       }
 
+      /**
+       * 这一段的**动作**该播在谁身上。默认发起方；`who` 可指定对方或「先到者」。
+       * 台词仍归发起方（谁主动谁说话）—— `who` 只管动作，这是刻意的。
+       */
+      function actorFor(spec, actorA, actorB, cur) {
+        if (spec.who === 'responder') return actorB || actorA
+        if (spec.who === 'winner') return cur && cur.winner === (actorB && actorB.pet.id) ? actorB : actorA
+        return actorA
+      }
+
       /** 进入新阶段的一次性动作：播片 / 设朝向 / 放台词 / 起步。只在 sincePhase === 0 那一拍做。 */
-      function enterPhase(spec, actorA, actorB) {
+      function enterPhase(spec, actorA, actorB, cur) {
         if (spec.clip) {
-          if (actorA) actorA.play(spec.clip)
-          if (actorB && spec.clip === 'happy') actorB.play(spec.clip)
+          const target = actorFor(spec, actorA, actorB, cur)
+          if (target) target.play(spec.clip)
         }
         if (spec.facing === 'toward' && actorA && actorB) actorA.setFacing(actorB.x < actorA.x ? -1 : 1)
         if (spec.say) {
@@ -690,6 +700,17 @@ window.__ModuleLoader__.load({
           // 演员渲染宽 280（→ 156.8）。两个「0.28 的宽」不是同一个宽 ⇒ 终点与下限只差 22px。
           // 直接以对方为目标，**能走多近由 separate() 决定**（它是唯一的裁决点）。
           actorA.target = { x: actorB.x, y: actorB.y }
+        } else if (spec.move === 'apart' && actorA && actorB) {
+          // 并肩之后各自退回一点。退回量用**演员渲染宽**（与世界同一把尺子），
+          // 不是 ASSET.W —— 那是素材原生宽 640，算出来的 179.2 与 minGap 156.8 不同尺。
+          const back = ((actorA.box.w + actorB.box.w) * 0.28) / 2
+          actorA.target = { x: actorA.x + (actorA.x <= actorB.x ? -back : back), y: actorA.y }
+          actorB.target = { x: actorB.x + (actorA.x <= actorB.x ? back : -back), y: actorB.y }
+        } else if (spec.move === 'point' && actorA && actorB) {
+          // 双方冲向同一个中点 —— 谁离得近谁先到，这就是 contest 的胜负。
+          const mid = { x: (actorA.x + actorB.x) / 2, y: (actorA.y + actorB.y) / 2 }
+          actorA.target = { x: mid.x, y: mid.y }
+          actorB.target = { x: mid.x, y: mid.y }
         }
       }
 
@@ -702,10 +723,19 @@ window.__ModuleLoader__.load({
         // sincePhase 由执行器第一拍惰性补上（计划 Step 2 采纳的执行期修正 2026-10-11）：
         // open() 的返回对象形状保持 Task 3 的原样，test/director.test.mjs 的逐键断言才保住判别力。
         if (duet.sincePhase === undefined) duet.sincePhase = 0
-        if (duet.sincePhase === 0) enterPhase(spec, actorA, actorB)
+        if (duet.sincePhase === 0) enterPhase(spec, actorA, actorB, duet)
         duet.sincePhase += dt
         const done = spec.until && ADVANCE[spec.until] ? ADVANCE[spec.until](duet, world) : true
         if (!done) return null
+        // 离开 approach 时定胜负（contest 的 who:'winner' 靠它，否则那个分支永远取不到 ——
+        // 「声明了但无法到达」和「没声明」是一样的）。
+        // 判据是 spec §7 的「**先到者得**」：进入 approach 结束时**距自己的目标更近**的那只。
+        // 注意不能用「离对方多远」——contest 的 approach 是 move:'point'，两只 target 都指向
+        // 双方中点，而中点到两人的距离**恒相等**，用那个判永远平局。要比的是**各自到各自 target**。
+        if (duet.phase === 'approach') {
+          const distToTarget = (a) => (a && a.target) ? Math.hypot(a.target.x - a.x, a.target.y - a.y) : Infinity
+          duet.winner = distToTarget(actorB) < distToTarget(actorA) ? duet.responder : duet.initiator
+        }
         const i = PHASES.indexOf(duet.phase)
         if (i < PHASES.length - 1) {
           duet.phase = PHASES[i + 1]
