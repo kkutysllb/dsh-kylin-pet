@@ -397,4 +397,140 @@ function createDirector(opts) {
 
 Run: `npm test` → Expected: **103 pass / 0 fail**（94 + 9）。
 
+---
+
+## Task 4: 8 个剧本（`§SCRIPTS` 声明式编排表 + `LINES` 原创文案表）
+
+**Files:** Modify `src/stage/client.js`（新增 §SCRIPTS / §LINES）；Create `test/scripts.test.mjs`
+
+### Step 1: 编排表（**声明式**：剧本是数据，不是代码）
+
+> 为什么必须是数据：spec §12 R1 说「表现力天花板 = 6 段美术」，而**唯一有效的扩展杠杆是补美术**。
+> 只要剧本是表，补片就只改 `CLIPS`（V1 的档位表），**剧本代码零改动**。把剧本写成一堆 `if` 就毁掉这条。
+
+```js
+/**
+ * 8 个剧本的编排表（spec §7）。每阶段只允许三件事：
+ *   clip  —— 播哪一档（**必须**来自 CLIPS 的 6 档之一）
+ *   say   —— 冒哪句气泡（来自 LINES）
+ *   move  —— 谁朝谁走近（approach / contest 用）
+ * `until` 是阶段推进谓词名，实现见 §Director 的 ADVANCE。
+ */
+const SCRIPTS = Object.freeze({
+  greet: {
+    effect: 'greet',
+    phases: {
+      approach: { clip: 'walk', move: 'toward', until: 'near' },
+      open:     { clip: 'turn', facing: 'toward', until: 'turned' },
+      exchange: { clip: 'happy', say: 'greet', until: 'once' },
+      settle:   { clip: 'idle', until: 'immediate' },
+    },
+  },
+  gift: {
+    effect: ['gift', 'giftIgnored'],      // 对方接不接受是 Outcome；两条 effect 由 exchange 的结果选
+    phases: {
+      approach: { clip: 'walk', move: 'toward', until: 'near' },
+      open:     { clip: 'happy', say: 'gift', until: 'once' },
+      exchange: { clip: 'turn', until: 'once' },          // 对方开心或无视，表现相同、账本不同
+      settle:   { clip: 'idle', until: 'immediate' },
+    },
+  },
+  tease: {
+    effect: 'tease',
+    phases: {
+      approach: { clip: 'walk', move: 'toward', until: 'veryNear' },
+      open:     { clip: 'turn', facing: 'away', say: 'tease', until: 'turned' },
+      exchange: { clip: 'sad', who: 'responder', until: 'once' },   // 只有**对方**难过（spec §7）
+      settle:   { clip: 'idle', until: 'immediate' },
+    },
+  },
+  comfort: {
+    effect: 'comfort',
+    phases: {
+      approach: { clip: 'walk', move: 'toward', until: 'near' },
+      open:     { clip: 'idle', say: 'comfort', until: 'once' },
+      exchange: { clip: 'happy', who: 'responder', until: 'once' },
+      settle:   { clip: 'idle', until: 'immediate' },
+    },
+  },
+  shoulder: {
+    effect: 'shoulder',
+    phases: {
+      approach: { clip: 'walk', move: 'toward', until: 'near' },
+      open:     { clip: 'idle', facing: 'toward', until: 'immediate' },
+      exchange: { clip: 'idle', until: 'hold3s' },                  // 相向而立，呼吸相位错开
+      settle:   { clip: 'idle', move: 'apart', until: 'once' },
+    },
+  },
+  chase: {
+    effect: 'chase',
+    phases: {
+      approach: { clip: 'walk', move: 'toward', until: 'veryNear' },
+      open:     { clip: 'walk', say: 'chase', until: 'once' },
+      exchange: { clip: 'walk', until: 'hold4s' },                  // 位置驱动：撞边界换向
+      settle:   { clip: 'idle', until: 'immediate' },
+    },
+  },
+  reconcile: {
+    effect: 'reconcile',
+    phases: {
+      approach: { clip: 'walk', move: 'toward', until: 'near' },
+      open:     { clip: 'sad', say: 'reconcile', until: 'once' },
+      exchange: { clip: 'happy', say: 'gift', until: 'once' },      // 主动 + 献宝（spec §7）
+      settle:   { clip: 'idle', until: 'immediate' },
+    },
+  },
+  contest: {
+    effect: 'contest',
+    phases: {
+      approach: { clip: 'walk', move: 'point', until: 'arrived' },  // 双方冲向同一点
+      open:     { clip: 'turn', say: 'contest', until: 'once' },
+      exchange: { clip: 'happy', who: 'winner', until: 'once' },    // 先到者得
+      settle:   { clip: 'idle', until: 'immediate' },
+    },
+  },
+})
+
+/** 文案表：剧本 × 角色。**全原创**（不带任何上游措辞），V4 可顺势换表情包图。 */
+const LINES = Object.freeze({
+  greet:     { kylinzi: '在呢',     xisha: '嗯' },
+  gift:      { kylinzi: '看看这个', xisha: '……谢谢' },
+  tease:     { kylinzi: '略',       xisha: '……' },
+  comfort:   { kylinzi: '别难过',   xisha: '我没事' },
+  chase:     { kylinzi: '别跑',     xisha: '你追不上' },
+  reconcile: { kylinzi: '我错了',   xisha: '……算了' },
+  contest:   { kylinzi: '我先',     xisha: '我先' },
+})
+```
+
+> **`shoulder` 没有台词**，这是刻意的：并肩是**无言的亲近**，而且它最容易与 `greet` 混同 —— 靠台词区分是最省的做法，但这里要靠**时长**（`hold3s`）与**移动**（`apart`）区分。
+
+### Step 2: 阶段推进谓词 `ADVANCE`（补 Task 3 的 `duet.advance` 骨架）
+
+```js
+/** 谓词：给 (duet, world, dt) 判「本阶段结束了吗」。全部是**纯读**，不改状态。 */
+const ADVANCE = {
+  near:      (d, w) => dist(d, w) <= TUNING.NEAR_RADIUS,
+  veryNear:  (d, w) => dist(d, w) <= TUNING.NEAR_RADIUS * 0.6,
+  turned:    (d, w) => w.sincePhase >= 0.4,        // 转身动作放完约 0.4s
+  once:      (d, w) => w.sincePhase >= 0.6,        // 一次性档播完就够
+  immediate: (d, w) => w.sincePhase >= 0.2,
+  hold3s:    (d, w) => w.sincePhase >= 3.0,
+  hold4s:    (d, w) => w.sincePhase >= 4.0,
+  arrived:   (d, w) => w.sincePhase >= 1.5,        // 争抢：谁先到由 world 的位置比较决定，这里只做兜底
+}
+```
+
+### Step 3: 测试 `test/scripts.test.mjs`
+
+1. **每个剧本都以 `approach` 开头、以 `settle` 收尾**（四阶段完整，不许缺）；
+2. **每个 `clip` 都在 `CLIPS` 的 6 档里**（用一个「遍历全部剧本的全部阶段」的循环断言）—— 这条直接防住「剧本写了没有的美术档」；
+3. **每个 `until` / `facing` / `move` / `who` 都在 `ADVANCE` 或白名单里有定义**（拼错名字要能被抓住）；
+4. **每个 `say` 在 `LINES` 里有对应词条**；`LINES` 的每个键都能在 `SCRIPTS` 里找到（双向对账，防止留下死文案）；
+5. **解锁条件与 spec §7 对得上**：`gift` 要 `familiarity>=3`、`tease` 要 `>=5`、`shoulder` 要 `affinity>=20`、`reconcile` 要 `affinity<0`（与 `TUNING.UNLOCK` 交叉核对）；
+6. **效果与 spec §7 对得上**：`reconcile` 的 affinity 增量是 **8**（最大的那个，别抄错）；`tease` 是 **−3**；`giftIgnored` 是 **−1**。
+
+Run: `npm test` → Expected: **114 pass / 0 fail**（103 + 11）。
+
+
 
