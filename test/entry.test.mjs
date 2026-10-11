@@ -425,3 +425,22 @@ test('/pet：commands 服务在时注册一次；缺席时不抛（优雅降级�
   assert.equal(registered.length, 1, '缺席时不该再注册')
 })
 
+
+test('/pet 探针：logger 在时会报「apply 时 commands 在不在」（这是真机上唯一的观测窗口）', () => {
+  const lines = []
+  const makeCtx = (cmd) => ({
+    on: () => () => {},
+    webServer: { register: () => () => {} },
+    effect: (fn) => fn(),
+    logger: { info: (m) => lines.push(m) },
+    get: (n) => (n === 'commands' ? cmd : undefined),
+  })
+  apply(makeCtx(undefined))
+  assert.ok(lines.some((l) => l.indexOf('commands service at apply: false') >= 0), '缺席时要报 false')
+  lines.length = 0
+  apply(makeCtx({ register: () => () => {} }))
+  assert.ok(lines.some((l) => l.indexOf('commands service at apply: true') >= 0), '在时要报 true')
+  // 这行**刻意保留**：`ctx.logger.info` 在真引擎里不走 stdout（2026-10-11 实测探针 home 也搜不到），
+  // 但它仍是唯一能把「服务就绪时机」带出来的通道 —— 用户的引擎若把它落到日志文件，就能读到。
+})
+

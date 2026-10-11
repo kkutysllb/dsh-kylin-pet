@@ -152,6 +152,11 @@ export function apply(ctx) {
   // "Read a service from the store without the inject requirement"）：服务在就注册，
   // 不在就**优雅降级** —— 插件的其余功能照常，而「重置」另一条路（删文件后重启）已写进 README。
   const commands = ctx.get ? ctx.get('commands') : undefined
+  // 只读探针：**无论走哪条路都保留**。它是唯一能在真机上观测「服务就绪时机」的窗口，
+  // 而且一行不吵。2026-10-11 用它实测：真 profile 里 apply 时 commands **已经就绪**。
+  if (ctx.logger && ctx.logger.info) {
+    ctx.logger.info('[dsh-kylin-pet] commands service at apply: ' + String(!!commands))
+  }
   if (commands && typeof commands.register === 'function') {
     commands.register({
       definitionId: 'dsh-kylin-pet/pet',
