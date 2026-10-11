@@ -39,7 +39,12 @@ const C = loadContract()
 function mkActor(id, x, y) {
   const a = {
     pet: { id: id }, held: false, busy: false, x: x, y: y, plays: [],
-    play: (clip) => { a.plays.push(clip) },
+    // `box` 与 `setFacing` 是**世界依赖**：`enterPhase` 会读 actor.box.w，判胜负时也会用。
+    // 替身缺了它们，一个本来与被测行为无关的用例会以 TypeError 红 —— 而红的原因
+    // 看起来像「实现坏了」。**enterPhase 每加一处世界依赖，就要同步补进替身。**
+    box: { w: 280, h: 157.5 },
+    setFacing: () => {},
+    play: (clip, exact) => { a.plays.push(exact || clip) },
   }
   return a
 }
@@ -197,3 +202,37 @@ test('freePartner：跳过被拎起 / busy 的宠，且不会返回自己', () =
   s.B.busy = false
   assert.equal(s.d.freePartner(s.A), s.B)
 })
+
+test('Task5c·6 导演尊重 world 的 a.next：没轮到时**一次都不点播**（每帧抢 ⇒ 屏幕闪烁）', () => {
+  // 真浏览器取证（用户报「屏幕闪烁」）：3 秒内 **18 次真实 src 变更**，档位在
+  // 「状态整理」（idle 档）与「状态张望」（walk 档）之间每 2 帧翻一次 ——
+  // 因为导演每帧重挑意图、每帧 play，把 idleChain 刚点播的「转身」立刻盖回去。
+  const s = mkScene()
+  s.B.held = true          // 没有可配对的对手 ⇒ 稳定走「独处」那条路
+  s.A.next = 5             // 远未到点
+  for (let i = 0; i < 90; i++) s.d.step(1 / 60)
+  assert.equal(s.A.plays.length, 0, 'a.next 还远未到点，导演不该点播（实际 ' + s.A.plays.length + ' 次）')
+  // 到点后必须能动作，否则上面那条是「导演压根不工作」的假绿
+  s.A.next = 0
+  s.d.step(1 / 60)
+  assert.ok(s.A.plays.length > 0, '到点后必须能排动作')
+})
+
+test('Task5c·7 freePartner 不招募正在干活的宠（否则合演会把忙碌画面掀掉）', () => {
+  // 口径说明：`socialGate` 里已有 `if (self.working) return 'working'`，且有既有测试
+  // （V5 socialGate）守着 —— 撤销它该测试会红，本轮实测确认过。
+  // 这里补的是**另一条**：`freePartner` 从**对方**那一侧也不能把在忙的宠拽进合演。
+  const s = mkScene()
+  s.minds.xisha.working = true
+  assert.equal(s.d.freePartner(s.A), null, '在忙的宠不能被招募为合演对手')
+  s.minds.xisha.working = false
+  assert.equal(s.d.freePartner(s.A), s.B, '不忙了就要能招募 —— 否则上一条只是「永远返回 null」的假绿')
+  // 导演这一侧：在忙的宠既不被点播、也不被设 target
+  const s2 = mkScene()
+  s2.minds.kylinzi.working = true
+  s2.A.next = 0            // 打开 a.next 闸：否则「没有点播」是被它挡住的，与 working 无关
+  for (let i = 0; i < 30; i++) s2.d.step(1 / 60)
+  assert.equal(s2.A.plays.length, 0, '在忙的宠不该被点播（实际 ' + s2.A.plays.length + '）')
+  assert.equal(s2.A.target, undefined, '也不该被设 target（设了 idleChain 就早退，忙碌档播不出来）')
+})
+

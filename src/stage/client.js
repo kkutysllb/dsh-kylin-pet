@@ -675,6 +675,10 @@ window.__ModuleLoader__.load({
           if (a === self) continue
           if (a.held) continue
           if (a.busy) continue
+          // V5：**别招募正在干活的宠** —— 招募它会把它从「忙碌」拽进合演，
+          // 而合演会设 target、点播档位，等于换个方式把忙碌画面掀掉。
+          const pm = minds[a.pet.id]
+          if (pm && pm.working) continue
           return a
         }
         return null
@@ -872,6 +876,15 @@ window.__ModuleLoader__.load({
           if (a.held || a.busy) continue
           const m = minds[a.pet.id]
           if (!m) continue
+          // V5：**正在干活的宠对导演不可用**。
+          // ⚠️ 2026-10-11 真浏览器取证发现：这里原本只挡了下面「独处」那一条路
+          // （`if (!m.working) a.play(...)`），而**社交路径一条都没挡** —— approach 会
+          // `a.target = {…}` + `play('walk')`、败者仲裁会 `play('idle')`。
+          // 结果就是导演与上面的忙碌分支**每帧互抢**：导演设 target ⇒ idleChain 早退 ⇒
+          // 忙播不出；走到目的地 ⇒ target 清空 ⇒ 忙播出来 ⇒ 导演又设 target……
+          // 用户看到的是**屏幕闪烁**（90 帧内档位跳 6 个状态）。
+          // 正确的语义不是「导演别播」，而是「这只宠此刻在忙，导演别碰它」。
+          if (m.working) continue
           const other = freePartner(a)
           const pick = chooseIntent(m, other ? minds[other.pet.id] : null, rng)
           events.push({ type: 'intent', pet: a.pet.id, intent: pick.intent, family: pick.family })
@@ -879,7 +892,19 @@ window.__ModuleLoader__.load({
             // V5：**任务执行期导演不排独处动作**。这一行原本每帧都 play，会在 world.step
             // 播完「状态忙碌」之后把它盖掉 —— 实测里忙碌档被覆盖了 186 次而画面纹丝不动，
             // 因为覆盖者就是这里。帧序是 world.step → director.step，**导演是最后写者**。
-            if (!m.working) a.play(pick.intent === 'walk' ? 'walk' : pick.intent === 'nap' ? 'idle' : 'idle')
+            //
+            // ⚠️ 2026-10-11 真浏览器取证（用户报「屏幕闪烁」）：上面那个闸只挡住了「在忙」这一种冲突，
+            // **没挡住「不忙时导演与 idleChain 抢同一只宠」**。导演每帧重挑意图、每帧 play 一次，
+            // 而 `chooseIntent` 的 argmax 在相邻帧之间会翻（walk ↔ idle），于是把 idleChain
+            // 刚点播的「转身」在下一帧盖回「待机」——实测 3 秒内 18 次真实 src 变更。
+            // 修法：**导演尊重世界的节奏**。`a.next` 是 world 的「下一次可以换动作」计时器，
+            // `idleChain` 自己就按它走；导演也在同一个闸门后动作，两边从此不抢。
+            if (!m.working && a.next <= 0) {
+              const want = pick.intent === 'walk' ? 'walk' : 'idle'
+              a.play(want)
+              if (want === 'walk') a.target = { x: rand(0.15, 0.85) * W(), y: rand(0.5, 0.92) * H() }
+              a.next = rand(2.5, 7)
+            }
             continue
           }
           // 意图名 ≠ 剧本名。approach 是「走过去」这个前导动作，SCRIPTS 里没有它。
