@@ -127,6 +127,7 @@ window.__ModuleLoader__.load({
     const ANIM_EXT = '.webm'
     const STAGE_ID = 'dsh-kylin-pet-stage'
     const SLOT_NAME = 'shell.overlay'   // 宿主槽位名（Slots.listSubTree 里的 Frame-wide floating layer）
+    const SETTINGS_SLOT = 'settings.section'   // 设置页槽位（参考实现同款挂点）
     const DROP_DISTANCE = 120   // spec §8：拖到一起放下即触发一次近距离互动
 
     exports.inject = ['slots']
@@ -1674,6 +1675,105 @@ window.__ModuleLoader__.load({
       return null
     }
 
+    /* ==================== §7 设置页（v0.1.1 S5） ==================== */
+    /**
+     * 设置页挂进 settings.section 槽位：体型 / 位置 / 余额播报 三个白名单字段。
+     * 保存走 PUT /config（host 写用户覆盖层 main-config.jsonc，原子落盘）；
+     * 尺寸与锚点是舞台启动时定死的 —— 保存后提示刷新页面生效，不搞运行期热重载
+     * （热重载要重建演员与锚点，出错面远大于收益）。
+     */
+    function PetSettings() {
+      const React = require('react')
+      const state = React.useState
+      const [draft, setDraft] = state(null)
+      const [msg, setMsg] = state('')
+      const [saved, setSaved] = state(false)
+      const [busy, setBusy] = state(false)
+      React.useEffect(() => {
+        let gone = false
+        fetch(ROUTE_PREFIX + '/config', { cache: 'no-store' })
+          .then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+          .then((c) => {
+            if (gone) return
+            setDraft((c.cast || []).map((p) => ({ id: p.id, name: p.name, size: p.size, anchor: p.anchor, balance: p.balance === true })))
+          })
+          .catch(() => { if (!gone) setMsg('配置读取失败（宿主不在？）') })
+        return () => { gone = true }
+      }, [])
+      if (!draft) {
+        return React.createElement('div', { style: STYLE.box }, React.createElement('div', { style: STYLE.dim }, msg || '载入中…'))
+      }
+      const upd = (id, key, val) => setDraft(draft.map((p) => (p.id === id ? Object.assign({}, p, { [key]: val }) : p)))
+      const save = () => {
+        setBusy(true); setMsg(''); setSaved(false)
+        fetch(ROUTE_PREFIX + '/config', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          cache: 'no-store',
+          body: JSON.stringify({ patch: { cast: draft.map((p) => ({ id: p.id, size: Number(p.size), anchor: p.anchor, balance: p.balance })) } }),
+        })
+          .then(async (r) => {
+            const b = await r.json().catch(() => ({}))
+            if (!r.ok) throw new Error((b && b.message) || 'HTTP ' + r.status)
+            setSaved(true); setMsg('已保存')
+          })
+          .catch((err) => setMsg('保存失败：' + String(err && err.message)))
+          .then(() => setBusy(false))
+      }
+      const rows = draft.map((p) => React.createElement('div', { key: p.id, style: STYLE.row },
+        React.createElement('span', { style: STYLE.name }, p.name),
+        React.createElement('label', { style: STYLE.field },
+          '体型',
+          React.createElement('input', {
+            type: 'number', min: 120, max: 560, step: 20, value: p.size,
+            style: STYLE.num,
+            onChange: (e) => upd(p.id, 'size', Number(e.target.value)),
+          }),
+        ),
+        React.createElement('label', { style: STYLE.field },
+          '位置',
+          React.createElement('select', {
+            value: p.anchor, style: STYLE.sel,
+            onChange: (e) => upd(p.id, 'anchor', e.target.value),
+          },
+            React.createElement('option', { value: 'top-left' }, '左上'),
+            React.createElement('option', { value: 'top-right' }, '右上'),
+            React.createElement('option', { value: 'bottom-left' }, '左下'),
+            React.createElement('option', { value: 'bottom-right' }, '右下'),
+          ),
+        ),
+        React.createElement('label', { style: STYLE.field },
+          React.createElement('input', {
+            type: 'checkbox', checked: p.balance,
+            onChange: (e) => upd(p.id, 'balance', e.target.checked),
+          }),
+          '余额播报',
+        ),
+      ))
+      return React.createElement('div', { style: STYLE.box },
+        React.createElement('div', { style: STYLE.title }, '麒麟仔与鲸鱼娘'),
+        rows,
+        React.createElement('div', { style: STYLE.foot },
+          React.createElement('button', { style: STYLE.btn, disabled: busy, onClick: save }, busy ? '保存中…' : '保存'),
+          msg ? React.createElement('span', { style: STYLE.dim }, msg) : null,
+          saved ? React.createElement('button', { style: STYLE.btnGhost, onClick: () => location.reload() }, '刷新页面生效') : null,
+        ),
+      )
+    }
+    const STYLE = {
+      box: { padding: '10px 12px', border: '1px solid rgba(128,140,160,0.25)', borderRadius: '10px', margin: '8px 0', background: 'rgba(128,140,160,0.06)' },
+      title: { font: '600 13px/1.6 system-ui, sans-serif', marginBottom: '6px' },
+      row: { display: 'flex', alignItems: 'center', gap: '14px', padding: '4px 0', flexWrap: 'wrap' },
+      name: { minWidth: '52px', font: '500 13px/1.6 system-ui, sans-serif' },
+      field: { display: 'inline-flex', alignItems: 'center', gap: '6px', font: '400 12px/1.6 system-ui, sans-serif', opacity: 0.9 },
+      num: { width: '64px' },
+      sel: {},
+      foot: { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' },
+      btn: { cursor: 'pointer' },
+      btnGhost: { cursor: 'pointer', opacity: 0.85 },
+      dim: { font: '400 12px/1.6 system-ui, sans-serif', opacity: 0.65 },
+    }
+
     exports.apply = (ctx) => {
       const slots = ctx && ctx.slots
       if (!slots || typeof slots.inject !== 'function' || typeof slots.register !== 'function') {
@@ -1685,6 +1785,11 @@ window.__ModuleLoader__.load({
         { name: SLOT_NAME, id: 'dsh-kylin-pet', order: 1000, label: '麒麟仔与鲸鱼娘' },
         PetOverlay,
       )), 'dsh-kylin-pet slot @ ' + SLOT_NAME)
+      // S5：设置页。槽位缺席（老宿主）时 inject 无人认领即无效，不影响舞台 —— 与舞台互不牵连。
+      ctx.effect(() => slots.inject(SETTINGS_SLOT, () => slots.register(
+        { name: SETTINGS_SLOT, id: 'dsh-kylin-pet', order: 30, label: '麒麟仔与鲸鱼娘' },
+        PetSettings,
+      )), 'dsh-kylin-pet settings @ ' + SETTINGS_SLOT)
     }
     return exports
   },

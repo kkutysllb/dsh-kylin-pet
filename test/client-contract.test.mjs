@@ -98,13 +98,15 @@ test('V5b·1 apply 收 ctx 并注册**恰好一处** effect —— 关插件开�
     },
   }
   ex.apply(ctx)
-  assert.equal(labels.length, 1, '必须注册**恰好一处** effect（多一处会在卸载时重复收尾）')
-  assert.ok(String(labels[0]).indexOf('dsh-kylin-pet') >= 0, 'label 要能认出是我们：' + labels[0])
-  assert.equal(disposers.length, 1)
-  // 挂的必须正是「整帧浮动层」槽位 —— 挂别处等于又把它塞进某个有主布局里。
-  assert.deepEqual(slots, ['shell.overlay'])
+  // v0.1.1 S5：两处 effect —— 舞台（shell.overlay）+ 设置页（settings.section）。
+  assert.equal(labels.length, 2, '舞台与设置页各注册一处 effect（多/少都会破坏卸载契约）')
+  assert.ok(labels.every((l) => String(l).indexOf('dsh-kylin-pet') >= 0), 'label 要能认出是我们：' + JSON.stringify(labels))
+  assert.ok(slots.indexOf('shell.overlay') >= 0 && slots.indexOf('settings.section') >= 0, '两个槽位都要挂：' + JSON.stringify(slots))
+  assert.equal(disposers.length, 2)
+  // 挂的必须正是「整帧浮动层」+ 设置页两个槽位 —— 挂别处等于又把它塞进某个有主布局里。
+  assert.deepEqual(slots, ['shell.overlay', 'settings.section'])
   // 卸载必须**安全**：绝不抛 —— 抛会让整个模块的驱逐失败。
-  assert.doesNotThrow(() => disposers[0]())
+  for (const d of disposers) assert.doesNotThrow(() => d())
   assert.deepEqual(slots, [], '卸载后槽位注册要被收回')
   // 宿主没有 slots 服务时必须**响亮降级**（warn 一句就退出），不许静默挂到 body 上。
   assert.doesNotThrow(() => ex.apply({ effect: () => () => {} }))

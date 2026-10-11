@@ -503,3 +503,47 @@ test('黄11：PUT /bond 非 application/json 回 415', async () => {
     assert.equal(store.snapshot().pairs['kylinzi|xisha'].affinity, 2, '同 id 重放经 HTTP 也只落一次')
   } finally { server.close() }
 })
+
+// ── v0.1.1 S5：设置页的 PUT /config ──────────────────────────────────────
+
+test('S5：PUT /config 白名单保存 + GET 反映新值；坏 patch 回 400 带人话；未接能力回 501', async () => {
+  const { saveConfigPatch } = await import('../src/server/pet-config.js')
+  const home = mkdtempSync(join(tmpdir(), 'kylin-entry-cfg-'))
+  const config = loadPetConfig({ home: '/nonexistent-home-for-test' })
+  const handler = createHandler({
+    config,
+    resolveAsset: createAssetResolver({ config, home: '/nonexistent-home-for-test' }),
+    reloadConfig: () => loadPetConfig({ home }),
+    saveConfig: (patch) => saveConfigPatch(patch, { home }),
+  })
+  const bare = createHandler({ config, resolveAsset: createAssetResolver({ config, home: '/nonexistent-home-for-test' }) })
+  const server = createServer(handler)
+  const server2 = createServer(bare)
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok))
+  await new Promise((ok) => server2.listen(0, '127.0.0.1', ok))
+  try {
+    const b = 'http://127.0.0.1:' + server.address().port
+    const put = async (body, ctype) => fetch(b + '/config', { method: 'PUT', headers: { 'content-type': ctype || 'application/json' }, body: JSON.stringify(body) })
+    const bad = await put({ patch: { cast: [{ id: 'kylinzi', size: 42 }] } })
+    assert.equal(bad.status, 400)
+    const badBody = await bad.json()
+    assert.match(badBody.message, /size 必须在 120-560/, '400 必须带人话：' + badBody.message)
+    const unknown = await put({ patch: { theme: 'dark' } })
+    assert.equal(unknown.status, 400)
+    const okRes = await put({ patch: { cast: [{ id: 'kylinzi', size: 320, balance: true }] } })
+    assert.equal(okRes.status, 200)
+    const okBody = await okRes.json()
+    assert.equal(okBody.saved, true)
+    const kz = okBody.config.cast.find((p) => p.id === 'kylinzi')
+    assert.equal(kz.size, 320)
+    assert.equal(kz.name, '麒麟仔', '回的必须是完整配置（整表按 id 覆写）')
+    const xisha = okBody.config.cast.find((p) => p.id === 'xisha')
+    assert.equal(xisha.balance, true, '没提的那只保持出厂原值（xisha 本就 true），不得被挤掉')
+    const after = await (await fetch(b + '/config')).json()
+    assert.equal(after.cast.find((p) => p.id === 'kylinzi').size, 320, 'GET 要反映保存后的值（reloadConfig）')
+    const plain = await fetch(b + '/config', { method: 'PUT', headers: { 'content-type': 'text/plain' }, body: 'x' })
+    assert.equal(plain.status, 415, 'PUT /config 与 PUT /bond 同款 content-type 门')
+    const b2 = 'http://127.0.0.1:' + server2.address().port
+    assert.equal((await fetch(b2 + '/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 501, '没接保存能力回 501')
+  } finally { server.close(); server2.close() }
+})

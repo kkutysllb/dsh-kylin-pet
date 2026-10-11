@@ -68,3 +68,57 @@ test('真实出厂配置能过校验（防 assets/default-config.jsonc 被改坏
   assert.equal(cfg.directing.duet.distance, 120)
   assert.equal(cfg.directing.duet.cooldownSec, 300)
 })
+
+// ── v0.1.1 S5：设置页写入口 ───────────────────────────────────────────────
+
+test('sanitizeConfigPatch：白名单整形，多余字段与坏值一律抛错', async () => {
+  const { sanitizeConfigPatch } = await import('../src/server/pet-config.js')
+  const base = loadPetConfig({ home: '/nonexistent-home-for-test' })
+  const okp = sanitizeConfigPatch({ cast: [{ id: 'kylinzi', size: 320, anchor: 'bottom-right', balance: true }] }, base)
+  assert.deepEqual(okp, { cast: [{ id: 'kylinzi', size: 320, anchor: 'bottom-right', balance: true }] })
+  assert.deepEqual(sanitizeConfigPatch({ directing: { workStatus: { xisha: ['fail'] } } }, base), { directing: { workStatus: { xisha: ['fail'] } } })
+  const bads = [
+    [{ cast: [{ id: 'nobody', size: 280 }] }, /cast 之外的 id/],
+    [{ cast: [{ id: 'kylinzi', size: 9999 }] }, /size 必须在 120-560/],
+    [{ cast: [{ id: 'kylinzi', anchor: 'middle' }] }, /anchor 必须是/],
+    [{ cast: [{ id: 'kylinzi', balance: 'yes' }] }, /balance 必须是布尔/],
+    [{ directing: { workStatus: { nobody: ['ok'] } } }, /workStatus 里出现了 cast 之外的 id/],
+    [{ directing: { workStatus: { xisha: ['meh'] } } }, /只允许 ok\/fail/],
+    [{ directing: { other: 1 } }, /directing 不认识字段/],
+    [{ theme: 'dark' }, /patch 不认识字段/],
+    ['nope', /patch 必须是对象/],
+  ]
+  for (const [input, re] of bads) assert.throws(() => sanitizeConfigPatch(input, base), re, JSON.stringify(input))
+})
+
+test('saveConfigPatch：原子落盘、与既有覆盖层深合并、保存后 loadPetConfig 读到新值', async () => {
+  const { saveConfigPatch, loadPetConfig } = await import('../src/server/pet-config.js')
+  const { existsSync, mkdirSync, writeFileSync } = await import('node:fs')
+  const home = join(mkdtempSync(join(tmpdir(), 'kylin-cfg-')), '')
+  // 预置一份既有覆盖层（完整 cast 条目 —— 覆盖层的 cast 是整组替换语义，部分条目本来就非法）：
+  // 它应该被保留并与新 patch 合并。
+  mkdirSync(join(home, 'dsh-kylin-pet'), { recursive: true })
+  writeFileSync(join(home, 'dsh-kylin-pet', 'main-config.jsonc'), JSON.stringify({
+    cast: [
+      { id: 'kylinzi', name: '麒麟仔', anchor: 'top-right', size: 400, animationDir: 'main-animation', memeDir: 'main-memes', balance: false },
+      { id: 'xisha', name: '鲸鱼娘', anchor: 'bottom-left', size: 280, animationDir: 'whale-animation', memeDir: 'whale-memes', balance: false },
+    ],
+  }))
+  const saved = saveConfigPatch({ cast: [{ id: 'xisha', balance: true }] }, { home })
+  assert.equal(saved.path, join(home, 'dsh-kylin-pet', 'main-config.jsonc'))
+  assert.equal(existsSync(saved.path + '.tmp'), false, '原子写不留 tmp 残骸')
+  const cfg = loadPetConfig({ home })
+  const kz = cfg.cast.find((p) => p.id === 'kylinzi')
+  const xs = cfg.cast.find((p) => p.id === 'xisha')
+  assert.equal(kz.size, 400, '既有覆盖层的字段原样保留')
+  assert.equal(xs.balance, true, '新 patch 生效')
+  assert.equal(saved.config.cast.find((p) => p.id === 'kylinzi').size, 400, '返回的 config = 保存后应当生效的完整配置')
+})
+
+test('saveConfigPatch：坏 patch 抛错且不落盘', async () => {
+  const { saveConfigPatch } = await import('../src/server/pet-config.js')
+  const { existsSync } = await import('node:fs')
+  const home = mkdtempSync(join(tmpdir(), 'kylin-cfg-'))
+  assert.throws(() => saveConfigPatch({ cast: [{ id: 'kylinzi', size: 42 }] }, { home }), /size 必须在/)
+  assert.equal(existsSync(join(home, 'dsh-kylin-pet', 'main-config.jsonc')), false, '失败的保存不得留下半份覆盖层')
+})

@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs'
 import { ROUTE_PREFIX } from '../shared/contract.js'
-import { loadPetConfig } from './pet-config.js'
+import { loadPetConfig, saveConfigPatch } from './pet-config.js'
 import { createBondStore, emptyLedger } from './bond.js'
 import { readBalance, unavailable } from './ledger.js'
 import { createAssetResolver, createMemeIndex } from './static-assets.js'
@@ -70,6 +70,10 @@ export function createHandler(opts) {
   const readBalanceImpl = opts.readBalanceImpl || (() => unavailable('no-credentials-service'))
   // 梗图清单（v0.1.1 S4）：createHandler 直用方（V1/V2 老测试）没接就回 501，与 bond 同款口径。
   const memeIndex = opts.memeIndex || null
+  // S5：GET /config 的实时重读与 PUT /config 的落盘能力。直用方（老测试）不接 ⇒ GET 照旧
+  // 回 apply 时刻的静态 config、PUT 回 501 —— 能力在、只是没接，比 404 诚实。
+  const reloadConfig = opts.reloadConfig || null
+  const saveConfig = opts.saveConfig || null
   const castIds = config.cast.map((pet) => pet.id)
 
   /** PUT /bond：施加一批事件 -> 落盘 -> 回新账。没接账本回 501（能力在、只是没接，比 404 诚实）。 */
@@ -100,11 +104,35 @@ export function createHandler(opts) {
     const url = new URL(req.url || '/', 'http://127.0.0.1')
     // 前缀路由可能给全路径，也可能给剩余段 —— 两条都吃
     const path = url.pathname.startsWith(ROUTE_PREFIX) ? url.pathname.slice(ROUTE_PREFIX.length) : url.pathname
-    // PUT 只对 /bond 开放；别处（含 V1/V2 的老路径）仍是 405。
+    // PUT 只对 /bond 与 /config 开放；别处（含 V1/V2 的老路径）仍是 405。
     if (req.method === 'PUT' && path === '/bond') return putBond(req, res)
+    if (req.method === 'PUT' && path === '/config') {
+      // S5：保存设置。白名单整形在 pet-config.saveConfigPatch —— 抛错回 400 并带上人话。
+      if (!saveConfig) {
+        req.resume()
+        return sendJson(res, 501, { error: 'config-save-not-attached' })
+      }
+      // 黄11 同款：写面一律 application/json（preflight 门），不让简单请求绕进来。
+      const ctype = String((req.headers && req.headers['content-type']) || '')
+      if (ctype.indexOf('application/json') !== 0) {
+        req.resume()
+        return sendJson(res, 415, { error: 'content-type-not-json' })
+      }
+      return readJson(req, BODY_LIMIT, res).then((got) => {
+        if (!got.ok) return
+        try {
+          const saved = saveConfig((got.value && got.value.patch) || {})
+          return sendJson(res, 200, { saved: true, config: saved.config })
+        } catch (err) {
+          return sendJson(res, 400, { error: 'invalid-patch', message: String((err && err.message) || err) })
+        }
+      }).catch(() => {
+        if (!res.headersSent) sendJson(res, 500, { error: 'config-put-failed' })
+      })
+    }
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendJson(res, 405, { error: 'method-not-allowed' })
     if (path === '/health') return sendJson(res, 200, { ok: true, cast: castIds })
-    if (path === '/config') return sendJson(res, 200, config)
+    if (path === '/config') return sendJson(res, 200, reloadConfig ? reloadConfig() : config)
     if (path === '/state') {
       // since 缺省/非数字 ⇒ 起步查询：只报水位，不给历史（新 client 不该响应加载前的诱因）。
       return sendJson(res, 200, { cursor: board.cursor, stimuli: board.since(url.searchParams.get('since')) })
@@ -166,6 +194,9 @@ export function apply(ctx) {
     config: config,
     resolveAsset: createAssetResolver({ config }),
     memeIndex: createMemeIndex({ config }),
+    // S5：GET 每次重读（两份小文件，代价可忽略）—— 保存后不改 host 代码就能拿到新配置。
+    reloadConfig: () => loadPetConfig(),
+    saveConfig: (patch) => saveConfigPatch(patch, {}),
     board: board,
     bond: bond,
     readBalanceImpl: readBalanceImpl,
