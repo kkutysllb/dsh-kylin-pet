@@ -34,5 +34,29 @@ export const LOOPING = Object.freeze(['idle', 'walk'])
 /** 诱因种类：host 产、client 消费。client 逐字镜像一份，由一致性测试钉死。 */
 export const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting'])
 
+/** 账本边界（spec §4.5）。夹取与环形上限都从这里取，别在实现里写魔数。 */
+export const BOND = Object.freeze({
+  AFFINITY_MIN: -100,
+  AFFINITY_MAX: 100,
+  HISTORY_MAX: 50,
+  PAIR_SEP: '|',
+})
+
+/** 余额「取不到」的原因（封闭集合）。分类是为了让用户知道该去做什么。 */
+export const LEDGER_REASONS = Object.freeze([
+  'no-credentials-service',
+  'not-configured',
+  'network-error',
+  'http-error',
+  'shape-unrecognized',
+  'no-balance-info',
+  'unsupported-currency',
+])
+
+/** 档位阈值，降序。判定 = 第一个满足 值 >= 阈值 的档；解析不出数字则 tier=null（不猜）。 */
+export const BALANCE_TIERS = Object.freeze([
+  ['充裕', 100], ['健康', 50], ['正常', 20], ['偏低', 5], ['告急', 1], ['见底', 0],
+])
+
 export const ANIM_EXT = '.webm'
 export const MEME_EXT = '.png'
