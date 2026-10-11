@@ -1727,4 +1727,26 @@ git log --oneline
 
 另记一条**不是产品缺陷**的探针坑：待机链会让角色走开，**命中框量完就失效**，点击断言因而偶发假红；取证脚本改成「量完立刻点、最多重试 4 次」，本机 1 次即命中。
 
+### 事后收紧：`window.__ModuleLoader__` 是**我们自己的垫片**，真加载器另有两条契约
+
+V1 的取证页里，`__ModuleLoader__` 是 harness **自己写的**：
+```js
+window.__ModuleLoader__ = { load: function (m) { var ex = m.factory(...); ex.apply({}) } }
+```
+也就是说，那一轮证明的是「client.js 在**我们假设的**契约下能跑」，**不是**「DSH 真加载器会接受它」。2026-10-11 补做静态核对（读运行时源码，非猜测）：
+
+事实源：`<kcoder-runtime>/node_modules/@deepseek-ai/dsh-client-modules/lib/types/client/system.js`
+
+| 真加载器的行为 | 出处 | 我们的 client | 结论 |
+|---|---|---|---|
+| 调用工厂时**传入 `require`**：`registered.factory(this.makeRequire(ownerId, edges))` | `system.js:291` | `factory: (require) => {…}` | ✅ 兼容（我们忽略它） |
+| 注册 id 先做归一化 `stripClientSuffix`：只剥末尾 `/client` | `manifest.js:101-103` | `id: 'dsh-kylin-pet'` | ✅ 无后缀，等于包名 |
+| 同一 id 重复注册**抛错** | `system.js:154-157` | 单文件、只 `load` 一次 | ✅ |
+| bundle 执行完必须按**期望 id** 注册，否则抛 `loaded without registering …` | `system.js:628,744` | id = `package.json` 的 `name` | ✅ 一致 |
+| `exports.inject` / `exports.apply` 的消费**不在加载器里**（在客户端插件激活层） | `system.js` 全文无 `inject`/`apply` | `inject = []`、`apply = fn` | ⚠️ **静态核对到此为止** |
+
+**如实标注**：最后一行我**没有**核到消费点。旁证是同一 profile 里真实工作的 `dsh-shell-prefs/client.js`（`inject: []` + `exports.apply`，与我们的形态逐项相同），但这仍是**旁证**。
+
+**结论**：V1 的十条硬门证明的是「**client 逻辑在假定契约下全绿**」；「**真 DSH 加载器 + 真插件激活层把 client 挂上去**」这一条，只有把插件装进 profile 起一次引擎才能证明。这就是 Task 12 Step 2 不可替代的原因——它不是一个可选的收尾，它是**唯一还没被证明的一环**。
+
 
