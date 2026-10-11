@@ -1,0 +1,5 @@
+# dsh-kylin-pet v2（clean-room 原创实现）的 bundle patch。
+# 契约：entry id 必须与包名一致；id 行不得带行尾注释（STORE 预检按行尾直接换行抓值）。
+- insert:
+    - id: dsh-kylin-pet
+      name: 'dsh-kylin-pet'

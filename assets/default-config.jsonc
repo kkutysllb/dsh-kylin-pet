@@ -1,0 +1,28 @@
+{
+  // 麒麟仔 vs 鲸鱼娘 —— 出厂导演表。
+  // 用户覆盖层：<dsh家目录>/dsh-kylin-pet/main-config.jsonc（整段深合并，数组整组替换）。
+  "cast": [
+    {
+      "id": "kylinzi",
+      "name": "麒麟仔",
+      "anchor": "top-right",
+      "size": 280,
+      "animationDir": "main-animation",
+      "memeDir": "main-memes",
+      "balance": false
+    },
+    {
+      "id": "xisha",
+      "name": "鲸鱼娘",
+      "anchor": "bottom-left",
+      "size": 280,
+      "animationDir": "whale-animation",
+      "memeDir": "whale-memes",
+      "balance": true
+    }
+  ],
+  "directing": {
+    "workStatus": { "kylinzi": ["ok"], "xisha": ["fail"] },
+    "duet": { "distance": 120, "cooldownSec": 300 }
+  }
+}
