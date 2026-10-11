@@ -1,6 +1,6 @@
 {
   "name": "dsh-kylin-pet",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "麒麟仔 vs 鲸鱼娘 —— 双宠同台桌宠。clean-room 原创实现：机制参考 PC2005-cloud/dsh-pet（MIT），零上游代码/素材/文案。",
   "type": "module",
   "repository": {
