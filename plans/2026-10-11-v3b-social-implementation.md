@@ -624,6 +624,8 @@ function enterPhase(spec, actorA, actorB) {
     if (line && actorA) actorA.say(typeof line === 'string' ? line : (line[actorA.pet.id] || line[actorB.pet.id] || ''))
   }
   if (spec.move === 'toward' && actorA && actorB) {
+    // ⚠️ 过时写法：`ASSET.W * 0.28` = 179.2（素材原生宽 640），与 separate() 的 156.8 不是同一把尺子。
+    // 已在 Task 5d 改成 `actorA.target = { x: actorB.x, y: actorB.y }`（让 separate() 决定最终距离）。此处保留原文仅为记录。
     const gap = ASSET.W * 0.28
     actorA.target = { x: actorB.x + (actorA.x <= actorB.x ? gap : -gap), y: actorB.y }
   }
@@ -1000,8 +1002,11 @@ function actorFor(spec, actorA, actorB, duet) {
 ```js
 if (spec.move === 'toward') { …现在已有… }
 else if (spec.move === 'apart') {
-  // 并肩之后各自退回一点，别黏在一起
-  const back = ASSET.W * 0.28
+  // 并肩之后各自退回一点，别黏在一起。
+  // **退回量必须用演员渲染宽，不是 ASSET.W** —— 后者是素材原生宽 640，算出来的 179.2
+  // 与 `separate()` 的下限 156.8 不是同一个尺子（这个坑在 `move:'toward'` 里刚踩过一次）。
+  // 这里直接用世界自己的公式：两侧各退 minGap 的一半。
+  const back = ((actorA.box.w + actorB.box.w) * 0.28) / 2
   if (actorA) actorA.target = { x: actorA.x + (actorA.x <= actorB.x ? -back : back), y: actorA.y }
   if (actorB) actorB.target = { x: actorB.x + (actorA.x <= actorB.x ? back : -back), y: actorB.y }
 } else if (spec.move === 'point') {
