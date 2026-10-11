@@ -586,17 +586,22 @@ const ADVANCE = {
 
 > `d` = 合演，`w` = 世界，**两个形参各有各的用处**。原文把时间判据也写成 `w.sincePhase`，才让人没注意到 `sincePhase` 在整个仓里根本不存在。
 
-### Step 2: `open()` 给合演补上 `sincePhase`
+### Step 2: `sincePhase` 由**执行器**惰性补上，**`open()` 的形状不变**
+
+> **执行期修正（2026-10-11，实施子代理提出，Lead 采纳）**：本节原写「在 `open()` 的 `duet` 字面量里补 `sincePhase: 0`」。但 Task 3 落下的 `test/director.test.mjs` 用 `canon` **逐键钉死**了 `open()` 返回对象的形状（不含 `sincePhase`）—— 加进去就会打红它。
+>
+> 采纳的解法（**比原写法更好**）：`open()` 保持原样，`sincePhase` 由 `runDuet` 第一拍惰性补上：
 
 ```js
-duet = {
-  kind, initiator: initiatorActor.pet.id, responder: responderActor.pet.id,
-  phase: 'approach',
-  sincePhase: 0,
-  deadline: TUNING.PHASE_TIMEOUT_SEC.approach,
-  outcome: null, at,
-}
+// open() 不变。runDuet 里：
+if (duet.sincePhase === undefined) duet.sincePhase = 0
+if (duet.sincePhase === 0) enterPhase(spec, actorA, actorB)
+duet.sincePhase += dt
 ```
+
+> **为什么这样更好**：`sincePhase` 是**阶段推进**的账，不是**开场**的账。`open()` 的返回值因此保持成一个干净的「刚开场时的样子」契约，而 Task 3 那条「逐键钉死」的断言也就**保住了它全部的判别力**——它是本片里少数几条能发现「对象形状悄悄变宽」的断言，**不该为了新字段去放松它**。
+>
+> 安全前提：`ADVANCE` 只被 `runDuet` 调用，而它在读 `sincePhase` 之前一定先初始化过 ⇒ 不存在 `undefined >= 0.4` 恒假的路径。
 
 ### Step 3: 阶段执行器本体
 
