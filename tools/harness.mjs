@@ -14,10 +14,14 @@ import { createAssetResolver } from '../src/server/static-assets.js'
 import { createHandler } from '../src/server/entry.js'
 import { createBoard } from '../src/server/state.js'
 import { installStimuli } from '../src/server/stimuli.js'
+import { createBondStore } from '../src/server/bond.js'
+import { unavailable } from '../src/server/ledger.js'
 import { ROUTE_PREFIX } from '../src/shared/contract.js'
 
 const NL = String.fromCharCode(10)
 const port = Number(process.argv[2] || process.env.PORT || 7391)
+/** 账本路径可由 argv[3] 指定 —— Task 6 的「跨重启」验收要求两次启动用**同一个**路径。 */
+const bondPath = process.argv[3] || undefined
 const config = loadPetConfig()
 const resolveAsset = createAssetResolver({ config })
 const clientPath = new URL('../src/stage/client.js', import.meta.url)
@@ -38,6 +42,29 @@ const fakeCtx = {
   },
 }
 installStimuli(fakeCtx, board)
+
+/* ---- 账本面 -------------------------------------------------------------
+ * 用真的 createBondStore；路径可由 argv[3] 指到临时目录，绝不碰用户的真账本。
+ */
+const bond = createBondStore(bondPath ? { path: bondPath } : {})
+
+/* ---- 余额面：开发期开关 -------------------------------------------------
+ * 生产走 ctx.get('credentials')；harness 没有真 ctx，所以用一个显式开关
+ * 把 readBalance 的**每一条**降级路径都摆出来，供 Task 6 取证。
+ * ⚠️ 只存在于 harness：entry.js 与生产路径都没有它。
+ */
+let balanceCase = 'no-credentials-service'
+async function readBalanceImpl() {
+  const at = Date.now()
+  if (balanceCase === 'ok') {
+    return { kind: 'ok', currency: 'CNY', total: '110.00', granted: '10.00', toppedUp: '100.00', tier: '充裕', at: at, source: 'harness', note: '' }
+  }
+  if (balanceCase === 'tier-null') {
+    // 「取到了但解析不出数字」—— 这一档专门验「不猜档位」
+    return { kind: 'ok', currency: 'CNY', total: 'abc', granted: '', toppedUp: '', tier: null, at: at, source: 'harness', note: '' }
+  }
+  return unavailable(balanceCase, 'harness switch', at)
+}
 
 function payloadFor(name) {
   if (name === 'agent/error') {
@@ -60,7 +87,7 @@ function emitHost(name) {
 }
 
 /* ---- 前缀路由：真 handler ------------------------------------------------ */
-const handler = createHandler({ config, resolveAsset, board })
+const handler = createHandler({ config, resolveAsset, board, bond, readBalanceImpl })
 
 const PAGE = [
   '<!doctype html><html lang="zh"><head><meta charset="utf-8">',
@@ -104,6 +131,11 @@ createServer((req, res) => {
     const name = url.searchParams.get('name') || ''
     return sendJson(res, 200, emitHost(name))
   }
+  if (url.pathname === '/__balance') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'method-not-allowed' })
+    balanceCase = url.searchParams.get('case') || 'no-credentials-service'
+    return sendJson(res, 200, { case: balanceCase })
+  }
   // 其余（/health /config /state /pet/** /memes/**）一律走真 handler
   if (url.pathname === ROUTE_PREFIX || url.pathname.startsWith(ROUTE_PREFIX + '/')) {
     return handler(req, res)
@@ -114,4 +146,5 @@ createServer((req, res) => {
   console.log('harness: http://127.0.0.1:' + port)
   console.log('  cast: ' + config.cast.map((p) => p.id).join(', '))
   console.log('  events: ' + [...listeners.keys()].join(', '))
+  console.log('  bond: ' + bond.path)
 })

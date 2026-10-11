@@ -544,6 +544,73 @@ git commit -m 'test(v3): 真浏览器取证（账本跨重启存活 / 余额诚�
 
 **执行交接**：与 V2 同款 —— 每 Task 派一个干净上下文的子代理，Lead 在验收点核对证据；Task 6 由 Lead 亲跑。
 
+---
+
+# V3 取证记录（Lead 亲跑，2026-10-11）
+
+**装备**：升级后的 `tools/harness.mjs`（账本路径可注入 + `/__balance?case=` 开发期开关）+ headless Chromium + 真 `GET/PUT /bond`。
+
+## 十一条硬门（全部 true）
+
+| 门 | 结果 | 实测 |
+|---|---|---|
+| 验收台就绪 | ✅ | banner + `bond:` 路径 |
+| **拖到一起 → 账本落笔** | ✅ | `GET /bond` 的 affinity `null → 2` |
+| **重启后 host 仍持有** | ✅ | 重启前后都是 `2`（**已修掉 `null===null` 空过**） |
+| **重启后客户端读到** | ✅ | `readBond()` = `{affinity:2, familiarity:1}` |
+| 降级原因分类正确 | ✅ | `{kind:'unavailable', reason:'not-configured'}` |
+| 降级响应里没有数字字段 | ✅ | 无 `total` |
+| 降级不播报 | ✅ | 两只气泡皆空 |
+| **tier:null 也不播报** | ✅ | 两只气泡皆空（**「绝不伪造数字」的落地点**） |
+| `ok` 播给 `balance:true` 的那只 | ✅ | xisha 气泡 = `充裕` |
+| 另一只不动 | ✅ | 麒麟仔气泡为空 |
+| 零 console/page 错误 | ✅ | `errors: []` |
+
+## 截图（`evidence/v3/`）
+
+| 文件 | 场景 | sha256 |
+|---|---|---|
+| `01-bump.png` | 拖到一起放下（两只同时播 happy） | `cf52a2b3…` |
+| `02-after-restart.png` | 验收台重启后重开页面 | `d5917a2a…` |
+| `03-balance-ok.png` | `case=ok` → xisha 冒「充裕」 | `9bd2d92f…` |
+
+## ⚠️ 这一轮抓到 1 个**产品 bug** 与 4 个**我自己的探针 bug**
+
+### 产品 bug（已修，`296315c`）：`separate()` 跟用户抢位置
+
+`separate()` 每帧把靠太近的两只沿 x 推开，**但不排除被拎起的那只**。于是拖拽期间世界一直在把两只推开，**松手时距离已被推到 `minGap`(156.8)**，而 spec §8 的「拖到一起放下触发互动」要求 ≤ `DROP_DISTANCE`(120) —— **永远够不着**。
+
+修法：`if (x.held || y.held) continue` —— **被拎起的那只这一刻由用户定位，世界不该跟用户抢**。
+
+修完之后才拿到真正的 bump 签名（比之前的证据强得多）：
+
+```
+after drop front:  ["开心跳跃.webm", "开心跳跃.webm"]   ← bump 让**两只同时**播 happy
+local bond:        {"affinity":2,"familiarity":1}      ← queueBondEvent 真的触发
+```
+
+### 对 V2 取证记录的**更正**（必须留下）
+
+> V2 记录里写「拖到一起 → bump 生效 ✅ 稳定间距恰等于 minGap」。**那条证据不成立。**
+>
+> 两个原因：① V2 的取证 helper 取的是演员元素里**最后一个 div**，而 V2 加的气泡排在命中区之后 ⇒ 它一直在拖**气泡**（位于角色上方、`pointer-events:none`），`pointerdown` 根本没落到命中区；② 即使如此，拖拽后的「间距 == minGap」也能由**点击**触发的「好奇凑过来」+ `separate()` 推出来 —— 也就是说**那条断言当时就没有判别力**。
+>
+> 真正的 bump 签名是**两只同时播 happy + 账本 +2/+1**，而这在 `separate()` 修好之前**根本不可能发生**。
+>
+> **V2 那节的结论保留原文、在此标注失效**；V2 的 12 条门里，`dropCenterStabilisesAtMinGap` 应视为**从未被证明**。其余 11 条（事件注入 / 分流 / 气泡）与本次取证无冲突，仍然成立。
+
+### 我自己的 4 个探针 bug（**都不是产品缺陷**）
+
+| # | 症状 | 真因 |
+|---|---|---|
+| 1 | 拖拽抓不到命中区 | `hitBox` 取「最后一个 div」= **V2 的气泡**（在角色上方）。改按 `pointerEvents === 'auto'` 选 |
+| 2 | `ECONNREFUSED`，且 banner 出现两次 | `stopHarness` 的 2s 兜底 `setTimeout` 捕获的是**模块级 `child`**，而它已被下一次 `startHarness` 重新赋值 ⇒ 旧定时器 **SIGKILL 掉新起的那个**。改成抓进局部常量 |
+| 3 | `hostSurvivedRestart` 空过 | 断言写成 `after === before`，两边都是 `null` 时也绿 ⇒ 加 `typeof before === 'number' && before > 0` |
+| 4 | 余额播报等不到 | client 每 **30s** 才读一次 `/balance`，我只等了 8s。等到 40s 即绿 |
+
+**教训**：这一次的红绿反复，除第 1 条产品 bug 外，**四次都是我拿着上一版的假设去量新东西**。同类教训已记三次，这是第四次 —— 而这次它**遮蔽了一个真产品 bug**，代价最贵。
+
+
 
 
 
