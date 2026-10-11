@@ -555,6 +555,16 @@ for (const a of world.actors) {
   m.bond = bondFor(a.pet.id)        // V3 读回的账本快照；读不到就是 {affinity:0, familiarity:0}
   minds[a.pet.id] = m
 }
+
+> **⚠️ 硬要求（执行期对账发现的潜在崩溃）**：`createMind()` 的字面量里**没有 `bond`**，而 `unlocked(candidate, bond)` 直接读 `bond.familiarity`、`socialGate` 直接读 `self.bond.affinity` ——
+> **任何没有 `bond` 的心智走到 `chooseIntent` 都会抛 `TypeError`**（实测 `client.js:448-455 / 461-471`）。
+>
+> 所以本 Task 必须做到**两件**，缺一不可：
+> 1. 上面这段循环**在导演第一次 `step` 之前**给每只宠都赋上 `bond`（顺序不能反）；
+> 2. **给 `createMind` 的字面量补一个默认 `bond: { affinity: 0, familiarity: 0 }`** —— 让「心智永远有 bond」成为**类型级的不变式**，而不是靠调用方记得赋值。
+>    这样即使将来有人先建心智、后读账本（或账本读取失败），也只是走 0/0 的中性关系，而不是崩。
+>
+> 并补一条测试：**刚 `createMind` 出来、尚未赋 bond 的心智，直接调 `chooseIntent` 不许抛**（断言返回一个合法意图，且社交候选的 gate 原因是 `locked` 而非异常）。
 const director = createDirector({
   world: world,
   minds: minds,
