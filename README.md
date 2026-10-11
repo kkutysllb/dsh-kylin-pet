@@ -2,6 +2,17 @@
 
 麒麟仔 vs 鲸鱼娘 —— 跑在 DSH Web UI 里的双宠同台桌宠插件。
 
+## 安装
+
+```bash
+dsh plugin --profile web add dsh-kylin-pet     # npm 发布版
+# 或本地开发版（注意：file: 是**拷贝**不是链接，改动后要重装；开发请用 link:）
+dsh plugin --profile web add file:/path/to/dsh-kylin-pet
+```
+
+装完刷新页面即可；卸载：`dsh plugin --profile web remove dsh-kylin-pet`。
+镜像分发：[kkutysllb/dsh-plugins](https://github.com/kkutysllb/dsh-plugins) 的 `dsh-kylin-pet/` 子目录（`npm run sync:mirror` 同步）。
+
 ## 出处声明（clean-room）
 
 - 本包为**原创实现**：架构、代码、配置契约、文案均为本仓自有。

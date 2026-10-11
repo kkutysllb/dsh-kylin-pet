@@ -3,6 +3,13 @@
   "version": "0.1.0",
   "description": "麒麟仔 vs 鲸鱼娘 —— 双宠同台桌宠。clean-room 原创实现：机制参考 PC2005-cloud/dsh-pet（MIT），零上游代码/素材/文案。",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kkutysllb/dsh-kylin-pet.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./src/server/entry.js",
   "exports": {
     ".": "./src/server/entry.js",
@@ -14,6 +21,7 @@
     "test": "node --test \"test/**/*.test.mjs\"",
     "harness": "node tools/harness.mjs",
     "accept:v5b": "node tools/v5b-teardown.mjs",
+    "sync:mirror": "node scripts/sync-to-dsh-plugins.mjs",
     "check": "node --check src/shared/contract.js && node --check src/server/entry.js && node --check src/server/pet-config.js && node --check src/server/static-assets.js && node --check src/server/state.js && node --check src/server/stimuli.js && node --check src/server/bond.js && node --check src/server/ledger.js && node --check src/stage/client.js && node --check tools/harness.mjs"
   },
   "license": "MIT",
