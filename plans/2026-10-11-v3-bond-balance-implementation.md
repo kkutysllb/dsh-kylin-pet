@@ -453,6 +453,8 @@ git commit -m 'feat(host): /bond GET+PUT 与 /balance GET（凭据绑定在 appl
 
 `start()` 内、`createWorld` 之前：`GET /bond`，把 `ledger.pairs[world.pairKey]` 交给世界；**读不到就用 `{affinity:0,familiarity:0}`**（降级不崩）。`world.pairKey = pairId(cast[0].id, cast[1].id)`。
 
+**同时把当前账本状态挂进 `__kylinContract.readBond()`**（返回 `{pairKey, affinity, familiarity}` 的**实时快照**，不是加载时的副本）—— Task 6 的「客户端确实读到了」这一半验收**只能**这样证，缺它就只能证 host 侧、证不了客户端。
+
 ### Step 3: `bump()` 提交 delta（防抖 2s）
 
 - `bump()` 除了现有表现，追加 `queueBondEvent({ kind:'bump', affinityDelta: +2, familiarityDelta: +1 })`；
