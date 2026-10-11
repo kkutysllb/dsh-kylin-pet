@@ -1004,7 +1004,23 @@ probe = () => ({
 2. **账本随互动增长**：同一时刻 `GET /bond` 的 `affinity` **与合演前不同**，且变化量 === `TUNING.EFFECT[该 kind]`（**用剧本表核对，不是「变了就行」**）；
 3. **冷却期内不重复**：继续轮询，在 `COOLDOWN_SEC[kind]` 窗口内断言 `memories` 里**同 kind 不出现第二次**（若出现，把两条的 `at` 差与冷却值一起打出来）；
 4. **被拎起退出社交**：`page.mouse.down()` 压在麒麟仔命中区**不松手**，轮询 `directorState()` → 断言此后**没有新的 `duet` 开启**；若当时正好有一场，断言 `memories` 里出现 `aborted: 'partner-held'`；
-5. **诱因不再直接点播（V3b 与 V2 的可观测分界）**：注入一次 `agent/error`，**同步**读 `directorState()` → 断言 `moods.xisha.mood` **立刻**下降，但**没有任何 actor 的当前档位被同步改成 `sad`**；截图 `02-stimulus-to-mind.png`；
+5. **诱因不再直接点播（V3b 与 V2 的可观测分界）** —— **⚠️ 口径已按 2026-10-11 的实测基线重写**：
+
+   **实测基线（改动前，即 V2 行为）**：
+   ```
+   注入前:   clips [状态思考, 转身]      气泡 [[], []]
+   +500ms:   clips [状态思考, 安抚失败]  气泡 [[], ["让我想想"]]   ← 下一拍才变
+   +2000ms:  同上
+   ```
+
+   **诱因不是同步的** —— client 轮询 `/state`，诱因要等到**下一拍（≈500ms）**才被消费。所以原稿写的「**120ms 内** clip 没变」是一条**空过**的断言：V2 在那时也没变。
+
+   **正确口径：发射 `agent/error` 后等 ≥ 2 个轮询周期（1.5–2s），再断言三件事**：
+   - **A**：`directorState().moods.xisha.mood` 比发射前**下降**（诱因真的推动了心智）；
+   - **B**：**没有任何气泡** —— V2 会在下一拍冒出「让我想想」（`react` 里有 `a.say(LINES_STIMULUS[kind])`，而 `deliverStimulus` 对 `turn-fail` **不说话**）；
+   - **C**：没有任何 actor 的档位被**强制**换成 `sad` 档 —— V2 会在下一拍变成 `安抚失败.webm`。
+
+   截图 `02-stimulus-to-mind.png`；
 6. 零 console/page 错误。
 
 ### Step 3: 写回计划并提交
