@@ -98,11 +98,24 @@ export function createBondStore(opts = {}) {
     return ledger
   }
 
+  /**
+   * 清空账本并落盘。**走同一个 flush 路径** —— 不另写一份写文件逻辑，
+   * 否则「重置」会绕开原子写（tmp + rename）与目录创建，成为唯一的非原子写入口。
+   * 这是「关系重置」的可执行入口；另一条路是直接删文件后重启（README 有写）。
+   */
+  function reset() {
+    ledger = emptyLedger()
+    suspect = false
+    flush()
+    return JSON.parse(JSON.stringify(ledger))
+  }
+
   return {
     path: path,
     get ledger() { return ledger },
     get warnings() { return warnings.slice() },
     apply: apply,
+    reset: reset,
     /** 只读快照（HTTP 响应直接用它）。 */
     snapshot() { return JSON.parse(JSON.stringify(ledger)) },
   }

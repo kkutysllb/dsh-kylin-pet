@@ -400,3 +400,28 @@ test('apply 之后 /balance 绑上 ctx 凭据：回 unavailable 而不是 500', 
     })
   } finally { rmSync(t.dir, { recursive: true, force: true }) }
 })
+
+test('/pet：commands 服务在时注册一次；缺席时不抛（优雅降级，不是硬依赖）', () => {
+  const registered = []
+  const makeCtx = (withCommands) => ({
+    on: () => () => {},
+    webServer: { register: () => () => {} },
+    effect: (fn) => fn(),
+    logger: { info: () => {} },
+    get: (n) => (withCommands && n === 'commands' ? { register: (d) => { registered.push(d); return () => {} } } : undefined),
+  })
+  apply(makeCtx(true))
+  assert.equal(registered.length, 1, '有 commands 时必须注册一次')
+  assert.equal(registered[0].name, 'pet')
+  assert.equal(typeof registered[0].handler, 'function')
+  // status 是**只读**的：只断言形状，不断言内容 ——
+  // apply 里的 bond 用的是真实家目录路径（V3 起就是这样），断言内容会依赖用户真账本。
+  const out = registered[0].handler({ rawInput: 'status' })
+  assert.equal(typeof out.text, 'string')
+  // ⚠️ 刻意**不测** handler({rawInput:'reset'})：那会清掉用户真实的 bond.json。
+  // reset 的逻辑在 test/bond.test.mjs 里用临时路径单独测（那才是真正的承重点）。
+  // 缺席时必须优雅降级：不抛、不注册，插件其余功能照常。
+  assert.doesNotThrow(() => apply(makeCtx(false)))
+  assert.equal(registered.length, 1, '缺席时不该再注册')
+})
+

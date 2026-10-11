@@ -117,3 +117,17 @@ test('apply([]) 合法且不落盘', () => {
   assert.equal(statSync(path).mtimeMs, frozen * 1000, 'mtime 未动 = 没重写文件')
   assert.deepEqual(s2.snapshot(), { version: 1, pairs: {} })
 })
+
+test('reset：清空账本**并落盘**（走同一个 flush 路径，不另写一份写文件逻辑）', () => {
+  const path = tmpPath()
+  const store = createBondStore({ path })
+  store.apply([{ pair: 'kylinzi|xisha', kind: 'greet', affinityDelta: 2, familiarityDelta: 1, at: 1 }])
+  assert.equal(store.snapshot().pairs['kylinzi|xisha'].affinity, 2)
+  assert.ok(existsSync(path), 'apply 之后磁盘上应当有账本')
+  const after = store.reset()
+  assert.deepEqual(after, { version: 1, pairs: {} })
+  assert.equal(Object.keys(store.snapshot().pairs).length, 0, '内存里也清了')
+  // 关键：**磁盘也清了** —— 只看内存会漏掉「reset 没落盘」这一类 bug
+  assert.equal(Object.keys(JSON.parse(readFileSync(path, 'utf8')).pairs).length, 0, '磁盘文件必须也被清空')
+})
+

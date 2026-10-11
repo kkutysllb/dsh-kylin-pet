@@ -146,6 +146,32 @@ export function apply(ctx) {
     'dsh-kylin-pet routes @ ' + ROUTE_PREFIX,
   )
   ctx.effect(() => uninstall, 'dsh-kylin-pet stimuli @ ' + ROUTE_PREFIX)
+  // V4 Task 3：关系重置的可执行入口。
+  // **刻意不声明 inject: ['commands']** —— inject 的语义是**硬依赖**，服务缺席会让整个桌宠 pending；
+  // 为一条命令赌上全部功能不成比例。改用 ctx.get 探测（cordis 源码注释原文：
+  // "Read a service from the store without the inject requirement"）：服务在就注册，
+  // 不在就**优雅降级** —— 插件的其余功能照常，而「重置」另一条路（删文件后重启）已写进 README。
+  const commands = ctx.get ? ctx.get('commands') : undefined
+  if (commands && typeof commands.register === 'function') {
+    commands.register({
+      definitionId: 'dsh-kylin-pet/pet',
+      name: 'pet',
+      description: '麒麟仔与鲸鱼娘：查看关系状态 / 重置关系',
+      input: { hint: '[status|reset]', attachments: false },
+      handler: (invocation) => {
+        const raw = String((invocation && invocation.rawInput) || '').trim()
+        if (raw === 'reset') {
+          bond.reset()
+          return { text: '关系已重置：两只回到刚认识的样子。' }
+        }
+        const snap = bond.snapshot()
+        const keys = Object.keys(snap.pairs || {})
+        if (keys.length === 0) return { text: '还没有互动记录。' }
+        const p = snap.pairs[keys[0]]
+        return { text: keys[0] + ' 熟悉度 ' + p.familiarity + '，好感 ' + p.affinity + '（共 ' + (p.history || []).length + ' 次互动）' }
+      },
+    })
+  }
   if (ctx.logger && ctx.logger.info) {
     ctx.logger.info('[dsh-kylin-pet] ' + config.cast.map((p) => p.id).join(' + ') + ' @ ' + ROUTE_PREFIX)
   }
