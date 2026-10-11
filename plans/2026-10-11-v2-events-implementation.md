@@ -316,7 +316,9 @@ git commit -m 'feat(stimuli): 宿主事件 → 诱因（waterfall 原样交棒�
 
 给 `createHandler({ config, resolveAsset })` 加入可选 `board`；`GET <PREFIX>/state` 走 `board.since(url.searchParams.get('since'))`，回 `{ cursor, stimuli }`，头部 `cache-control: no-store`。
 
-**board 缺省时**（V1 的老调用方）要**仍然可用**：内部造一块惰性空板，`/state` 回 `{ cursor: 0, stimuli: [] }`。这样 V1 的 5 条 entry 测试一行都不用改。
+**board 缺省时**（V1 的老调用方）要**仍然可用**：内部造一块惰性空板，`/state` 回 `{ cursor: 0, stimuli: [] }`。
+
+> **执行期更正**：原文写「这样 V1 的 5 条 entry 测试一行都不用改」—— **不成立**。`apply` 现在要装订阅 ⇒ 会调 `ctx.on`，而 V1 那条「apply 注册一条前缀路由」的**假 ctx 没有 on** ⇒ `TypeError: ctx.on is not a function`。处置：给假 ctx 补一行 `on: () => () => {}` —— 这是**补齐宿主能力**（真 cordis ctx 必有 on），断言一字未动。
 
 ### Step 2: `apply(ctx)` 里装订阅
 
@@ -390,11 +392,24 @@ const LINES = Object.freeze({ 'turn-ok': '稳了', 'turn-fail': '让我想想', 
 const STATUS_OF = { 'turn-ok': 'ok', 'turn-fail': 'fail' }
 const CLIP_OF = { 'turn-ok': 'happy', 'turn-fail': 'sad', waiting: 'idle' }
 
-function qualified(kind) {
-  const cast = opts.config.cast
+/**
+ * 诱因 → 档位 → 资格。waiting 是「双方探头」，不查表。
+ *
+ * 签名是 `(kind, config)`、位置在**工厂作用域**（不是 createWorld 内）——
+ * 这是执行期发现的硬约束：`__kylinContract` 在**工厂装载期**就 freeze 了，
+ * 那一刻**根本没有 config**（config 是 start() 里 fetch 来的）。若把 qualified 关在
+ * createWorld 里闭包 opts.config，它就不可能又是一个「无 DOM、跨 realm 可调」的纯函数。
+ * 两参形态同时满足两边，且契约上挂的就是**生产用的同一个函数**，不是副本。
+ */
+const STATUS_OF = { 'turn-ok': 'ok', 'turn-fail': 'fail' }
+
+function qualified(kind, config) {
+  const cast = (config && config.cast) || []
   if (kind === 'waiting') return cast.map((p) => p.id)
   const want = STATUS_OF[kind]
-  const map = (opts.config.directing && opts.config.directing.workStatus) || {}
+  const map = (config && config.directing && config.directing.workStatus) || {}
+  return cast.filter((p) => (map[p.id] || []).indexOf(want) >= 0).map((p) => p.id)
+}
   return cast.filter((p) => (map[p.id] || []).indexOf(want) >= 0).map((p) => p.id)
 }
 
@@ -441,7 +456,7 @@ poll()
 
 - `test/client-contract.test.mjs`：`SHARED_KEYS` 加 `KINDS`（跨 realm 比较走 `canon()` —— V1 的教训）。
 - 新增 `test/client-stimulus.test.mjs`：把 `qualified` 挂到 `__kylinContract.qualified`（**纯函数、无 DOM 依赖**），在 `vm` 里跨 realm 直接调：
-  - `qualified('turn-ok')` → `['kylinzi']`；`qualified('turn-fail')` → `['xisha']`；`qualified('waiting')` → `['kylinzi','xisha']`；
+  - `qualified('turn-ok', cfg)` → `['kylinzi']`；`qualified('turn-fail', cfg)` → `['xisha']`；`qualified('waiting', cfg)` → `['kylinzi','xisha']`（`cfg` 是测试里显式写的字面量，取值面只有 `cast[].id` 与 `directing.workStatus`）；
   - `directing.workStatus` 缺失时：ok/fail 返回空、waiting 仍返回全体（**降级不崩**）。
 
 Run: `npm test` → Expected: **48 pass / 0 fail**。
