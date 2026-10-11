@@ -806,7 +806,8 @@ function deliverStimulus(stimulus) {
 
 ### Step 5: 测试 `test/client-v3b.test.mjs`
 
-把 `createMind` / `stepMind` / `chooseIntent` / `createDirector` / `SCRIPTS` / `ADVANCE` 全部挂进 `__kylinContract`（**纯逻辑，无 DOM**），跨 realm 调：
+把 `createMind` / `stepMind` / `chooseIntent` / `createDirector` / `SCRIPTS` / `ADVANCE` / **`LINES`** 全部挂进 `__kylinContract`
+> （`LINES` 是 2026-10-11 补的：Task 4 的 `say ⟷ LINES` 双向对账需要跨 realm 读取口，原清单漏了它。另外 `SCRIPTS`/`ADVANCE`/`LINES` 是 `const`（不提升），**契约冻结必须在工厂体末尾**，否则 TDZ。）（**纯逻辑，无 DOM**），跨 realm 调：
 1. **`deliverStimulus` 不再直接换档**：注入 `turn-fail` 后，断言**没有任何 actor 的 `play` 被同步调用**、但对应 mind 的 `mood` 掉了 —— 这条是「改成心智」的**核心证据**（用注入的桩 `play` 计数）；
 2. **点概率随 affinity 变**：`affinity = 0` → 0.5；`affinity = +100` → 0.95（夹住）；`affinity = -100` → 0.05；
 3. **导演在对方被拎起时不配对**（`freePartner` 跳过 held）；
