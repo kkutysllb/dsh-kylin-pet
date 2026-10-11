@@ -41,7 +41,8 @@ function removableCtx() {
 }
 
 test('agent/turn-stopping -> turn-ok，detail 为空串', () => {
-  assert.deepEqual(DIRECT.map((p) => p[0]), ['agent/turn-stopping', 'agent/error'])
+  // v0.1.1：turn-stopping 因 aborted 判别单独装监听，DIRECT 只剩 agent/error 一对一。
+  assert.deepEqual(DIRECT.map((p) => p[0]), ['agent/error'])
   assert.deepEqual(RELAY, ['approval/request', 'user-questions/request'])
   const ctx = fakeCtx()
   const board = createBoard({ now: () => 7 })
@@ -51,6 +52,16 @@ test('agent/turn-stopping -> turn-ok，detail 为空串', () => {
   assert.equal(board.all[0].kind, 'turn-ok')
   assert.equal(board.all[0].detail, '')
   assert.equal(board.all[0].at, 7)
+})
+
+test('黄12：用户中止的回合（signal.aborted）不记 turn-ok', () => {
+  const ctx = fakeCtx()
+  const board = createBoard()
+  installStimuli(ctx, board)
+  ctx.emit('agent/turn-stopping', { agent: {}, turn: 3, signal: { aborted: true } }, () => {})
+  ctx.emit('agent/turn-stopping', { agent: {}, turn: 4, signal: { aborted: false } }, () => {})
+  assert.equal(board.all.length, 1, '中止的静默，正常收工的照记')
+  assert.equal(board.all[0].kind, 'turn-ok')
 })
 
 test('agent/error -> turn-fail，detail 含错误名与消息', () => {
@@ -232,3 +243,112 @@ test('classifyTool：分类表逐项正确；未知/空/非字符串一律 other
   }
 })
 
+
+// ── v0.1.1 F1：会话跟随 ──────────────────────────────────────────────────
+
+test('F1 首条用户消息前不过滤（兼容口径），activity 立起 focus 后只认当前会话', () => {
+  const ctx = fakeCtx()
+  const board = createBoard()
+  installStimuli(ctx, board)
+  // focus 未立：谁的动作都上板（v0.1.0 行为）
+  ctx.emit('agent/status', { agent: { id: 'sessionA' }, status: 'running' })
+  assert.equal(board.all.length, 1)
+  // 立起 focus = sessionA
+  ctx.emit('api-session/activity', 'sessionA', 1)
+  ctx.emit('agent/status', { agent: { id: 'sessionB' }, status: 'running' })
+  assert.equal(board.all.length, 1, '别的会话开跑不得惊动桌宠')
+  ctx.emit('agent/status', { agent: { id: 'sessionA' }, status: 'running' })
+  assert.equal(board.all.length, 2, '当前会话开跑照常上板')
+  ctx.emit('agent/turn-stopping', { agent: { id: 'sessionB' }, turn: 1, signal: null }, () => {})
+  assert.equal(board.all.length, 2, '别的会话收工也不是「稳了」')
+  ctx.emit('agent/turn-stopping', { agent: { id: 'sessionA' }, turn: 1, signal: null }, () => {})
+  assert.equal(board.all.length, 3)
+})
+
+test('F1 focus 立起后：无主来源被过滤；审批/提问 relay 认不出会话时放行', () => {
+  const ctx = fakeCtx()
+  const board = createBoard()
+  installStimuli(ctx, board)
+  ctx.emit('api-session/activity', 'sessionA', 1)
+  ctx.emit('tools/pre-execute', { name: 'Read' }, () => 'next')
+  assert.equal(board.all.length, 0, '认不出会话的「在忙」不上板')
+  let calls = 0
+  ctx.emit('approval/request', { id: 'x' }, () => { calls += 1; return 'ok' })
+  assert.equal(calls, 1, 'waterfall 必须照常交棒')
+  assert.equal(board.all.length, 1, '认不出会话的审批要放行（用户必须看见「在呢」）')
+  assert.equal(board.all[0].kind, 'waiting')
+  // 带得出会话的 relay 照过滤
+  ctx.emit('approval/request', { agent: { id: 'sessionB' } }, () => 'ok')
+  assert.equal(board.all.length, 1, '别的会话的审批不上板')
+  ctx.emit('approval/request', { agent: { id: 'sessionA' } }, () => 'ok')
+  assert.equal(board.all.length, 2, '当前会话的审批上板')
+})
+
+test('F1 上板诱因带 session 字段（留证）', () => {
+  const ctx = fakeCtx()
+  const board = createBoard()
+  installStimuli(ctx, board)
+  ctx.emit('api-session/activity', 's1', 1)
+  ctx.emit('agent/status', { agent: { id: 's1' }, status: 'running' })
+  assert.equal(board.all[0].session, 's1')
+})
+
+test('F2 todo_write：首见 task-start、进度 task-progress、全完成 task-done、重复签名不上板', () => {
+  const ctx = fakeCtx()
+  const board = createBoard()
+  installStimuli(ctx, board)
+  const todos = (statuses) => ({ agent: { id: 's1' }, name: 'todo_write', arguments: { todos: statuses.map((s, i) => ({ content: 't' + i, status: s })) } })
+  ctx.emit('tools/pre-execute', todos(['in_progress', 'pending']), () => 'next')
+  assert.deepEqual(board.all.map((b) => [b.kind, b.detail]), [['task-start', '0/2']])
+  ctx.emit('tools/pre-execute', todos(['in_progress', 'pending']), () => 'next')
+  assert.equal(board.all.length, 1, '签名没变不得刷屏')
+  ctx.emit('tools/pre-execute', todos(['completed', 'in_progress']), () => 'next')
+  assert.deepEqual(board.all[1].detail, '1/2')
+  assert.equal(board.all[1].kind, 'task-progress')
+  ctx.emit('tools/pre-execute', todos(['completed', 'completed']), () => 'next')
+  assert.equal(board.all[2].kind, 'task-done')
+  assert.equal(board.all[2].detail, '2/2')
+})
+
+test('F2 换会话的待办清单重新起手；别的会话的待办被 focus 过滤', () => {
+  const ctx = fakeCtx()
+  const board = createBoard()
+  installStimuli(ctx, board)
+  const ev = (sid) => ({ agent: { id: sid }, name: 'todo_write', arguments: { todos: [{ content: 'a', status: 'completed' }] } })
+  ctx.emit('tools/pre-execute', ev('s1'), () => 'next')
+  assert.equal(board.all[0].kind, 'task-done', '首见即全完成 → task-done')
+  ctx.emit('tools/pre-execute', ev('s2'), () => 'next')
+  // 换会话 = 首见：清单首见即全完成，如实的通报就是「收工」——它没在开工，别硬说接活。
+  assert.equal(board.all[1].kind, 'task-done', '换会话首见即全完成 → task-done')
+  ctx.emit('api-session/activity', 's1', 1)
+  ctx.emit('tools/pre-execute', ev('s2'), () => 'next')
+  assert.equal(board.all.length, 2, '非当前会话的待办不上板')
+})
+
+test('F2 后台任务：registered/settled 上板、无主跳过、kill 带后缀', () => {
+  let listener = null
+  const jobs = { events: { subscribe: (_f, fn) => { listener = fn; return () => {} } } }
+  const ctx = fakeCtx()
+  ctx.get = (name) => (name === 'jobs' ? jobs : undefined)
+  const board = createBoard()
+  installStimuli(ctx, board)
+  listener({ type: 'progress', job: { label: 'x', owner: 's1' } })
+  assert.equal(board.all.length, 0, 'progress/stopping/output 是刷屏源')
+  listener({ type: 'registered', job: { label: '编译', owner: 's1' } })
+  assert.deepEqual(board.all.map((b) => [b.kind, b.detail, b.session]), [['task-start', '编译', 's1']])
+  listener({ type: 'settled', job: { label: '编译', owner: 's1' }, cause: 'producer', awaited: true })
+  assert.equal(board.all[1].kind, 'task-done')
+  assert.equal(board.all[1].detail, '编译', '正常完成不带后缀')
+  listener({ type: 'registered', job: { label: '下载', owner: undefined } })
+  assert.equal(board.all.length, 2, '无主任务是部署级杂音，不上板')
+  listener({ type: 'settled', job: { label: '下载', owner: 's1' }, cause: 'kill' })
+  assert.equal(board.all[2].detail, '下载·kill')
+})
+
+test('F2 没有 jobs 服务时优雅降级（ctx.get 缺席也不抛）', () => {
+  const ctx = fakeCtx()
+  const board = createBoard()
+  assert.doesNotThrow(() => installStimuli(ctx, board))
+  ctx.get = () => undefined
+  assert.doesNotThrow(() => installStimuli(ctx, board))
+})

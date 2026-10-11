@@ -64,15 +64,29 @@ export function createBondStore(opts = {}) {
     renameSync(tmp, path)
   }
 
+  // v0.1.1 幂等环：PUT /bond 的重试窗口（防抖 2s + 响应丢失重发）可能把同一批事件送来两次，
+  // 关系账本对重复 delta 不设防就会双记。事件带 id（客户端生成），这里内存环 256 去重。
+  // 环不落盘：跨重启的重放在 2s 窗口外，真实风险趋近于零，不值得为它加文件格式。
+  const seenIds = new Set()
+  const idRing = []
+
   /**
    * 施加一批事件。**这是账本唯一的写入口**（spec §6：剧本不得自己写账本）。
-   * @param {Array<{pair: string, kind?: string, affinityDelta?: number, familiarityDelta?: number, at?: number}>} events
+   * @param {Array<{id?: string, pair: string, kind?: string, affinityDelta?: number, familiarityDelta?: number, at?: number}>} events
    */
   function apply(events) {
     const list = Array.isArray(events) ? events : []
+    let touched = false
     for (const ev of list) {
       const key = String((ev && ev.pair) || '')
       if (!key) continue
+      const eid = ev && typeof ev.id === 'string' && ev.id !== '' ? ev.id : null
+      if (eid !== null) {
+        if (seenIds.has(eid)) continue
+        seenIds.add(eid)
+        idRing.push(eid)
+        if (idRing.length > 256) seenIds.delete(idRing.shift())
+      }
       const prev = normalizePair(ledger.pairs[key])
       const dA = num(ev && ev.affinityDelta, 0)
       const dF = num(ev && ev.familiarityDelta, 0)
@@ -88,13 +102,16 @@ export function createBondStore(opts = {}) {
           familiarityDelta: dF,
         }]).slice(-BOND.HISTORY_MAX),
       }
+      touched = true
     }
+    // 全部重复/空批：一个字没写就不落盘 —— 重试重放不该留下「更新时间前进了」的假象。
+    if (!touched) return ledger
     // 坏文件未被覆盖时：第一批写入前先把坏文件留个底，别让 flush 直接盖掉它
-    if (list.length && suspect) {
+    if (suspect) {
       try { renameSync(path, path + '.suspect') } catch (err) { /* 留底失败不阻断写入 */ }
       suspect = false
     }
-    if (list.length) flush()
+    flush()
     return ledger
   }
 

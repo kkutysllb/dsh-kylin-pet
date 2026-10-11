@@ -444,3 +444,62 @@ test('/pet 探针：logger 在时会报「apply 时 commands 在不在」（这�
   // 但它仍是唯一能把「服务就绪时机」带出来的通道 —— 用户的引擎若把它落到日志文件，就能读到。
 })
 
+
+// ── v0.1.1：素材缓存头 / 梗图清单路由 / PUT /bond 加固 ────────────────────
+
+test('黄7：素材响应可缓存（public, max-age=3600）', async () => {
+  const home = '/nonexistent-home-for-test'
+  const config = loadPetConfig({ home })
+  const handler = createHandler({ config, resolveAsset: createAssetResolver({ config, home }) })
+  const server = createServer(handler)
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok))
+  try {
+    const base = 'http://127.0.0.1:' + server.address().port
+    const res = await fetch(base + '/pet/kylinzi/' + encodeURIComponent('待机.webm'))
+    assert.equal(res.status, 200)
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=3600')
+  } finally { server.close() }
+})
+
+test('S4：/memes/<id>/index.json 回清单；未知宠 404；未接清单 501', async () => {
+  const home = '/nonexistent-home-for-test'
+  const config = loadPetConfig({ home })
+  const mod = await import('../src/server/static-assets.js')
+  const withIdx = createHandler({ config, resolveAsset: createAssetResolver({ config, home }), memeIndex: mod.createMemeIndex({ config, home }) })
+  const without = createHandler({ config, resolveAsset: createAssetResolver({ config, home }) })
+  const s1 = createServer(withIdx)
+  const s2 = createServer(without)
+  await new Promise((ok) => s1.listen(0, '127.0.0.1', ok))
+  await new Promise((ok) => s2.listen(0, '127.0.0.1', ok))
+  try {
+    const b1 = 'http://127.0.0.1:' + s1.address().port
+    const ky = await (await fetch(b1 + '/memes/kylinzi/index.json')).json()
+    assert.equal(ky.pet, 'kylinzi')
+    assert.ok(ky.memes.indexOf('在呢') >= 0 && ky.memes.indexOf('稳了') >= 0, '包内 9 张要在清单里：' + JSON.stringify(ky.memes))
+    assert.equal(ky.memes.length, 9)
+    const xs = await (await fetch(b1 + '/memes/xisha/index.json')).json()
+    assert.deepEqual(xs.memes, [], 'whale-memes 素材缺席 = 空清单（回退文字，不是 404）')
+    const nf = await fetch(b1 + '/memes/nobody/index.json')
+    assert.equal(nf.status, 404)
+    const b2 = 'http://127.0.0.1:' + s2.address().port
+    assert.equal((await fetch(b2 + '/memes/kylinzi/index.json')).status, 501, '没接清单回 501（与 bond 同款口径）')
+  } finally { s1.close(); s2.close() }
+})
+
+test('黄11：PUT /bond 非 application/json 回 415', async () => {
+  const home = '/nonexistent-home-for-test'
+  const config = loadPetConfig({ home })
+  const store = createBondStore({ path: join(mkdtempSync(join(tmpdir(), 'kylin-entry-')), 'bond.json') })
+  const handler = createHandler({ config, resolveAsset: createAssetResolver({ config, home }), bond: store })
+  const server = createServer(handler)
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok))
+  try {
+    const base = 'http://127.0.0.1:' + server.address().port
+    const bad = await fetch(base + '/bond', { method: 'PUT', headers: { 'content-type': 'text/plain' }, body: JSON.stringify({ events: [] }) })
+    assert.equal(bad.status, 415)
+    const ok2 = await fetch(base + '/bond', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ events: [{ id: 'e1', pair: 'kylinzi|xisha', kind: 'bump', affinityDelta: 2, familiarityDelta: 1, at: 1 }] }) })
+    assert.equal(ok2.status, 200)
+    await fetch(base + '/bond', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ events: [{ id: 'e1', pair: 'kylinzi|xisha', kind: 'bump', affinityDelta: 2, familiarityDelta: 1, at: 1 }] }) })
+    assert.equal(store.snapshot().pairs['kylinzi|xisha'].affinity, 2, '同 id 重放经 HTTP 也只落一次')
+  } finally { server.close() }
+})

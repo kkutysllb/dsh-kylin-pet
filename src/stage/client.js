@@ -33,7 +33,11 @@ window.__ModuleLoader__.load({
     const LOOPING = Object.freeze(['idle', 'walk'])
     // 点击反应池镜像（host 契约 CLICKS）：独立于 happy 档 —— 那档混着余额播报段。
     const CLICKS = Object.freeze(['点击开心', '开心跳跃', '庆祝成功'])
-    const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting', 'working', 'working-done'])
+    const KINDS = Object.freeze([
+      'turn-ok', 'turn-fail', 'waiting', 'working', 'working-done',
+      // v0.1.1 F2：任务跟随三态（与 host 契约逐字一致，一致性测试钉死）。
+      'task-start', 'task-progress', 'task-done',
+    ])
     // 镜像 `contract.BUSY_CLIP`。**它必须在 SHARED_KEYS 里** —— 我第一次改 client 时
     // 在 idleChain 里用了它却忘了镜像，测试全绿（因为没有一条测试走过忙碌分支），
     // 一进真实任务就是 ReferenceError。手工核对不是门，键表才是。
@@ -114,8 +118,12 @@ window.__ModuleLoader__.load({
       read: '在翻文件', write: '在改代码', exec: '在跑命令',
       web: '在查资料', agent: '在派活', other: '在忙着',
     })
+    /** 任务跟随（F2）的气泡文案（原创）。task-progress 不用表 —— detail 本身就是「3/7」。 */
+    const LINES_TASK = Object.freeze({ 'task-start': '接活了', 'task-done': '收工！' })
     /** 收工时**另一只**的应和。只在收工这一下，不在「在忙」期间 —— 那会变成两条气泡互相刷。 */
     const ECHO_DONE = '嗯'
+    /** 梗图清单（S4）：petId -> 可用基名数组（启动时拉一次）。空/缺席 = 回退文字气泡。 */
+    let memes = {}
     const ANIM_EXT = '.webm'
     const STAGE_ID = 'dsh-kylin-pet-stage'
     const SLOT_NAME = 'shell.overlay'   // 宿主槽位名（Slots.listSubTree 里的 Frame-wide floating layer）
@@ -157,7 +165,7 @@ window.__ModuleLoader__.load({
       // V5 执行期：主讲 = 工作状态挂在「成功/进展」那条线上的那只（人设上就是更主动的那只）。
       // **复用 workStatus 而不新加配置键** —— 它表达的本就是「这只负责进展这条线」；
       // 新加一个键意味着用户还要再配一次，而配错的表现是「两只都不说话」。
-      if (kind === 'working' || kind === 'working-done') {
+      if (kind === 'working' || kind === 'working-done' || kind === 'task-start' || kind === 'task-progress' || kind === 'task-done') {
         const ok = cast.filter((p) => (map[p.id] || []).indexOf('ok') >= 0).map((p) => p.id)
         return ok.length ? ok : cast.map((p) => p.id)   // 没分工（单宠/未配置）就都算主讲
       }
@@ -246,6 +254,12 @@ window.__ModuleLoader__.load({
       return clamp(0.5 + clamp(numOf(affinity, 0), BOND.AFFINITY_MIN, BOND.AFFINITY_MAX) / 200, 0.25, 0.9)
     }
 
+    /** 事件幂等键（v0.1.1 黄11）：PUT 重试窗口里同一批事件不得双记。host 侧有 256 的环去重。 */
+    function newEventId() {
+      try { if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID() } catch (err) { /* 老环境回落 */ }
+      return 'e' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
+    }
+
     /* ---------- 实时状态（契约里的 readBond 读的就是这里的当前值） ---------- */
     let bondState = { pairKey: '', affinity: 0, familiarity: 0, lastAt: 0, history: [] }
     let bondQueue = []   // 待发 delta：PUT 失败**不清空** —— 丢了就是关系丢了
@@ -288,6 +302,7 @@ window.__ModuleLoader__.load({
       const pair = String((ev && ev.pair) || bondState.pairKey || '')
       if (!pair) return null
       const full = {
+        id: newEventId(),
         pair: pair,
         kind: String((ev && ev.kind) || 'unknown'),
         affinityDelta: numOf(ev && ev.affinityDelta, 0),
@@ -316,8 +331,9 @@ window.__ModuleLoader__.load({
         let body = null
         try { body = await res.json() } catch (err) { body = null }   // 回账可选：读不到就信本地
         bondQueue.splice(0, events.length)
-        const saved = body && body.pairs ? body.pairs[bondState.pairKey] : null
-        if (saved) bondState = Object.assign({ pairKey: bondState.pairKey }, normalizeBondPair(saved))
+        // 橙6：无条件采纳 host 回账。/pet reset 后回包 pairs 为空，这里必须跟着归零 ——
+        // 只在 saved 非空时回写的话，运行中的页面永远拿着旧关系演（settle 以旧值为基数）。
+        if (body && body.pairs) bondState = Object.assign({ pairKey: bondState.pairKey }, normalizeBondPair(body.pairs[bondState.pairKey]))
       } catch (err) {
         // PUT 失败：保留待发队列，下一个 2s 窗口重试。丢了就是关系丢了。
         if (bondTimer === null) bondTimer = setTimeout(flushBondQueue, BOND_FLUSH_MS)
@@ -360,6 +376,7 @@ window.__ModuleLoader__.load({
       hit.style.position = 'absolute'
       hit.style.pointerEvents = 'auto'
       hit.style.cursor = 'grab'
+      hit.style.touchAction = 'none'   // 黄11：触屏不收掉默认手势的话，拖拽会被滚动截胡
       hit.style.left = (ASSET.HIT_X[0] * 100) + '%'
       hit.style.width = ((ASSET.HIT_X[1] - ASSET.HIT_X[0]) * 100) + '%'
       hit.style.top = (ASSET.CHAR_TOP * 100) + '%'
@@ -380,6 +397,10 @@ window.__ModuleLoader__.load({
       bubble.style.pointerEvents = 'none'
       bubble.style.opacity = '0'
       bubble.style.transition = 'opacity 160ms ease'
+      // 气泡内容分两层（S4）：文字 span + 梗图 img。梗图在时藏文字 —— 二选一，不叠。
+      const bubbleText = document.createElement('span')
+      bubble.appendChild(bubbleText)
+      let memeImg = null
 
       el.appendChild(vids[0])
       el.appendChild(vids[1])
@@ -399,7 +420,6 @@ window.__ModuleLoader__.load({
         rng: rngOf(fnv(pet.id)),
         next: 1.5 + (fnv(pet.id) % 1000) / 500,   // 首拍错开
         target: null,
-        immunityUntil: 0,
         onEnded: null,
       }
 
@@ -452,9 +472,24 @@ window.__ModuleLoader__.load({
       }
 
       /** 冒一句对白；ms 到点自动淡出。空文案当「不说」——别把气泡点亮成空气泡。 */
-      a.say = (text, ms) => {
-        if (!text) return
-        bubble.textContent = text
+      a.say = (text, ms, memeUrl) => {
+        // S4：有梗图用图（气泡里的 PNG），没有回退文字。text 仍传 —— 它是 alt 语义与测试观测点。
+        if (!text && !memeUrl) return
+        if (memeUrl) {
+          bubbleText.textContent = ''
+          if (!memeImg) {
+            memeImg = document.createElement('img')
+            memeImg.style.maxHeight = '72px'
+            memeImg.style.display = 'block'
+            memeImg.alt = String(text || '')
+            bubble.appendChild(memeImg)
+          }
+          memeImg.style.display = 'block'
+          memeImg.src = memeUrl
+        } else {
+          if (memeImg) memeImg.style.display = 'none'
+          bubbleText.textContent = text
+        }
         bubble.style.opacity = '1'
         if (a.sayTimer) clearTimeout(a.sayTimer)
         a.sayTimer = setTimeout(() => { bubble.style.opacity = '0' }, ms || 2200)
@@ -495,7 +530,9 @@ window.__ModuleLoader__.load({
         petId: petId,
         mood: 0,            // [-1, 1]
         energy: 1,          // [0, 1]
-        attention: 'free',  // free | drawn | focused
+        // v0.1.1：被用户拎起又放下的短免疫（秒）。原先的 actor.immunityUntil 只写不读，
+        // 是死字段 —— 换成心智上的秒数：stepMind 递减、socialGate 拒绝、curiosity 跳过。
+        immune: 0,
         // V5：任务执行期标记。**刻意放心里智而不是 actor** —— actor 上的 `busy` 已经被
         // 合演系统占用了（`separate()` / `freePartner` / `socialGate` 都在读它），
         // 复用它会让「任务在忙」把两只宠的合演资格也锁掉。
@@ -513,6 +550,7 @@ window.__ModuleLoader__.load({
       const T = TUNING
       const asleep = mind.energy <= 0.15
       mind.energy = clamp(mind.energy + (asleep ? T.ENERGY_RECOVER : -T.ENERGY_DRAIN) * dt, 0, 1)
+      if (mind.immune > 0) mind.immune = Math.max(0, mind.immune - dt)
       mind.mood = clamp(mind.mood - Math.sign(mind.mood) * Math.min(Math.abs(mind.mood), T.MOOD_REGRESS * dt), -1, 1)
       for (const k of Object.keys(mind.cooldown)) {
         mind.cooldown[k] = Math.max(0, mind.cooldown[k] - dt)
@@ -537,6 +575,7 @@ window.__ModuleLoader__.load({
      */
     function socialGate(candidate, self, other, dist) {
       if (self.cooldown[candidate]) return 'cooldown'
+      if (self.immune > 0) return 'immune'   // 黄9 落地：刚被放下 2s 内不主动开合演
       if (!unlocked(candidate, self.bond)) return 'locked'
       if (!other) return 'no-partner'
       if (other.held) return 'partner-held'
@@ -613,6 +652,13 @@ window.__ModuleLoader__.load({
      * 「没有任何 actor 的 play 被同步调用」必须有观测口。故把**同一份逻辑**提为显式参数的
      * 工厂作用域函数（函数体逐字照抄计划原文，只把 minds / actors / config 变成形参）。
      */
+    /** S4：这只宠有没有这张梗图；有就给 URL，没有回 null（回退文字气泡）。 */
+    function memeUrlOf(petId, name) {
+      const list = memes[petId]
+      if (!list || list.indexOf(name) < 0) return null
+      return ROUTE_PREFIX + '/memes/' + encodeURIComponent(petId) + '/' + encodeURIComponent(name + '.png')
+    }
+
     function deliverStimulus(minds, actors, stimulus, config) {
       // V2 react() 的守卫，必须保留：没有它，deliverStimulus(null) 会抛，被 poll 的 try/catch 吞掉
       // ⇒ since 不推进 ⇒ **整批诱因每 1s 反复重投**。
@@ -638,9 +684,11 @@ window.__ModuleLoader__.load({
         const m = minds[id]
         const a = actors.find((x) => x.pet.id === id)
         if (!m || !a || a.held) continue
-        if (stimulus.kind === 'turn-ok') { m.mood = clamp(m.mood + 0.35, -1, 1); m.energy = clamp(m.energy + 0.1, 0, 1) }
-        if (stimulus.kind === 'turn-fail') { m.mood = clamp(m.mood - 0.45, -1, 1) }
-        if (stimulus.kind === 'waiting') { m.attention = 'drawn'; a.say(LINES_STIMULUS.waiting) }
+        // 黄9：turn-ok/turn-fail 出气泡（waiting 先例：诱因可以说，不点播档位 ——
+        // 心智照旧，下一拍由导演决定动作）。有梗图升级成图。
+        if (stimulus.kind === 'turn-ok') { m.mood = clamp(m.mood + 0.35, -1, 1); m.energy = clamp(m.energy + 0.1, 0, 1); a.say(LINES_STIMULUS['turn-ok'], 0, memeUrlOf(id, LINES_STIMULUS['turn-ok'])) }
+        if (stimulus.kind === 'turn-fail') { m.mood = clamp(m.mood - 0.45, -1, 1); a.say(LINES_STIMULUS['turn-fail'], 0, memeUrlOf(id, LINES_STIMULUS['turn-fail'])) }
+        if (stimulus.kind === 'waiting') a.say(LINES_STIMULUS.waiting, 0, memeUrlOf(id, LINES_STIMULUS.waiting))
         if (stimulus.kind === 'working') a.say(LINES_WORKING[stimulus.detail] || LINES_WORKING.other)
         if (stimulus.kind === 'working-done') {
           a.say(LINES_STIMULUS['working-done'])
@@ -649,6 +697,10 @@ window.__ModuleLoader__.load({
           const other = actors.find((x) => x.pet.id !== id && !x.held)
           if (other) other.say(ECHO_DONE)
         }
+        // F2 任务跟随：接活 / 进度 / 收工 三态气泡（主讲 = workStatus ok 线，qualified 同 working）。
+        if (stimulus.kind === 'task-start') a.say(LINES_TASK['task-start'])
+        if (stimulus.kind === 'task-progress') a.say(String(stimulus.detail || ''))
+        if (stimulus.kind === 'task-done') { m.mood = clamp(m.mood + 0.2, -1, 1); a.say(LINES_TASK['task-done']) }
         touched.push(id)
       }
       return touched
@@ -848,8 +900,11 @@ window.__ModuleLoader__.load({
           actorA.target = { x: actorA.x + (actorA.x <= actorB.x ? -back : back), y: actorA.y }
           actorB.target = { x: actorB.x + (actorA.x <= actorB.x ? back : -back), y: actorB.y }
         } else if (spec.move === 'point' && actorA && actorB) {
-          // 双方冲向同一个中点 —— 谁离得近谁先到，这就是 contest 的胜负。
+          // 双方冲向同一个中点 —— 谁先到谁赢（contest 的胜负依据）。
           const mid = { x: (actorA.x + actorB.x) / 2, y: (actorA.y + actorB.y) / 2 }
+          // 红1：把中点记在场上。approach 结束时世界早已把到站者的 target 清掉，
+          // 旧的「比到各自 target 的距离」会把先到者判成 Infinity 输家 —— 胜负反转。
+          duet.point = mid
           actorA.target = { x: mid.x, y: mid.y }
           actorB.target = { x: mid.x, y: mid.y }
         }
@@ -874,8 +929,15 @@ window.__ModuleLoader__.load({
         // 注意不能用「离对方多远」——contest 的 approach 是 move:'point'，两只 target 都指向
         // 双方中点，而中点到两人的距离**恒相等**，用那个判永远平局。要比的是**各自到各自 target**。
         if (duet.phase === 'approach') {
-          const distToTarget = (a) => (a && a.target) ? Math.hypot(a.target.x - a.x, a.target.y - a.y) : Infinity
-          duet.winner = distToTarget(actorB) < distToTarget(actorA) ? duet.responder : duet.initiator
+          // 红1 修复：spec §7「先到者得」改用**到场中点的实际距离**判 —— 行走单调趋近，
+          // 先到者必更近；双双到点时 separate 把两只推到中点两侧近似等距，严格小于保持
+          // 平局给发起方（与旧 tie-break 一致）。
+          if (duet.point) {
+            const distToPoint = (a) => a ? Math.hypot(duet.point.x - a.x, duet.point.y - a.y) : Infinity
+            duet.winner = distToPoint(actorB) < distToPoint(actorA) ? duet.responder : duet.initiator
+          } else {
+            duet.winner = duet.initiator
+          }
         }
         const i = PHASES.indexOf(duet.phase)
         if (i < PHASES.length - 1) {
@@ -1144,7 +1206,9 @@ window.__ModuleLoader__.load({
 
       /** V1 的独处链：待机 / 散步 / 转身（V3 起由心智 Mind 接管）。 */
       function idleChain(a, dt, isWorking) {
-        if (a.held || a.target) return
+        // 红2：busy（合演中）的宠整个归导演 —— 独处链连倒数都不许走，
+        // 否则 next 到点照样掷骰，45% 概率 walk+target 直接把合演拆场。
+        if (a.held || a.busy || a.target) return
         // V5：任务执行期间播「状态忙碌」（walk 档里的**循环**素材，用 exact 播指定那一段，
         // 不能随机 —— 随机会跳去「走路」）。
         // `!a.busy` 是关键：`a.busy` 是**合演中**标记，合演期间必须由导演点播，
@@ -1179,8 +1243,9 @@ window.__ModuleLoader__.load({
             const d = Math.sqrt(dx * dx + dy * dy)
             if (d < 4) {
               a.target = null
-              a.play('idle')
-              a.next = rand(2.5, 7)
+              // 红2：合演中的宠到站只清 target，档位归导演 —— 中途插「待机」会把
+              // approach 的走路档拦腰打断（contest 里那只先到的看起来像弃权）。
+              if (!a.busy) { a.play('idle'); a.next = rand(2.5, 7) }
             } else {
               const v = Math.min(90 * dt, d)
               a.x += (dx / d) * v
@@ -1233,7 +1298,8 @@ window.__ModuleLoader__.load({
     }
 
     /* ==================== §5 手势 ==================== */
-    function wireGestures(world) {
+    function wireGestures(world, minds) {
+      const mindOf = (id) => ((minds && minds[id]) || null)
       for (const a of world.actors) {
         let grab = null
 
@@ -1273,6 +1339,8 @@ window.__ModuleLoader__.load({
           grab = null
           a.hit.style.cursor = 'grab'
           if (!dragged) {
+            // 红3：合演中的宠不接点击 —— 打断演出的点击等于让宠「穿越」自己的剧本。
+            if (a.busy) return
             // 参考实现 handleClick：点击 = 先**收手停住**再回应。不清 target 会「边走边播点击反应」，
             // 而且 onEnded 被 a.target 短路成「不回待机」，走路状态就再也出不去了。
             a.target = null
@@ -1280,8 +1348,11 @@ window.__ModuleLoader__.load({
             // 连点两下播同一段，看起来就像没反应。
             a.play('happy', pickDifferent(CLICKS, a.clipName, a.rng))
             const mate = world.nearest(a, Infinity)
-            // spec §8：对方是否好奇凑过来由**关系**决定（V1 的 50% 占位已被 affinity 取代）
-            if (mate && !mate.held && Math.random() < curiosityOf(bondState.affinity)) {
+            const mm = mate ? mindOf(mate.pet.id) : null
+            // spec §8：对方是否好奇凑过来由**关系**决定（V1 的 50% 占位已被 affinity 取代）。
+            // 红3/黄9：合演中、在忙、刚被放下（免疫期）的 mate 一律不拉 —— 那三个状态
+            // 都会把「凑过来」变成又一个插播写者。
+            if (mate && !mate.held && !mate.busy && !(mm && mm.working) && !(mm && mm.immune > 0) && Math.random() < curiosityOf(bondState.affinity)) {
               mate.setFacing(a.x < mate.x ? -1 : 1)
               mate.play('walk')
               mate.target = { x: a.x + (a.x < mate.x ? 90 : -90), y: a.y }
@@ -1289,7 +1360,8 @@ window.__ModuleLoader__.load({
             return
           }
           a.held = false
-          a.immunityUntil = performance.now() + 2000
+          const own = mindOf(a.pet.id)
+          if (own) own.immune = 2   // 黄9 落地：放下后 2s 内不开合演、不被好奇拉走
           a.play('idle')
           a.next = rand(2, 5)
           const mate = world.nearest(a, DROP_DISTANCE)
@@ -1335,6 +1407,16 @@ window.__ModuleLoader__.load({
       // §4.5：createWorld 之前先读账本（读不到就用 0/0 —— 降级不崩），bump 才接得上关系。
       const pairKey = pairId(config.cast[0].id, config.cast[1].id)
       bondState = Object.assign({ pairKey: pairKey }, normalizeBondPair(await loadBondPair(pairKey)))
+      // S4：梗图清单拉一次（失败 = 没有梗图，回退文字，不挡启动）。清单为空的宠永远走文字。
+      for (const p of config.cast) {
+        try {
+          const r = await fetch(ROUTE_PREFIX + '/memes/' + encodeURIComponent(p.id) + '/index.json', { cache: 'no-store' })
+          if (r.ok) {
+            const body = await r.json()
+            memes[p.id] = Array.isArray(body && body.memes) ? body.memes.map(String) : []
+          }
+        } catch (err) { /* 没清单就没图 */ }
+      }
       const root = createStageRoot()
       ;(host || document.body).appendChild(root)
       const world = createWorld({ config: config, root: root })
@@ -1351,10 +1433,13 @@ window.__ModuleLoader__.load({
       // **必须在建导演之前**：createDirector 在创建时就拷贝 world.pairKey，晚了它拿到的是 undefined，
       // settle 事件会带 pair: undefined（全靠 queueBondEvent 的回退才没出事 —— 而那正是「靠兜底活着」）。
       world.pairKey = pairKey
+      // 橙4：model 持引用 —— 帧循环里与 bondState 对齐，settle / 解锁 / priority 的
+      // 基数才不会停在启动那一刻。
+      const model = { bond: bondFor('*') }    // 双方共用一对账本：pairKey 已由 V3 定好
       const director = createDirector({
         world: world,
         minds: minds,
-        model: { bond: bondFor('*') },    // 双方共用一对账本：pairKey 已由 V3 定好
+        model: model,
         rng: Math.random,
         onStimulus: queueBondEvent,       // ← V3 的防抖写入口；导演**不自己发请求**
       })
@@ -1377,7 +1462,7 @@ window.__ModuleLoader__.load({
           clip: actorOf(id, 'clipName'),
         }])),
       })
-      wireGestures(world)
+      wireGestures(world, minds)
       let last = performance.now()
       /* V5b：卸载闸。单靠 cancelAnimationFrame 不够 —— 若卸载正好发生在一帧**执行中**
          （effect 与 rAF 回调同在一个宏任务队列里），帧尾那句 requestAnimationFrame 会
@@ -1403,6 +1488,9 @@ window.__ModuleLoader__.load({
             // —— 例如 shoulder 要 affinity ≥ 20，用户把关系养到 20 也要刷新页面才解锁。
             m.bond = { affinity: bondState.affinity, familiarity: bondState.familiarity }
           }
+          // 橙4：导演的账本镜像与心智同源 —— settle 写 model.bond 后 queueBondEvent 立刻
+          // 同步进 bondState，下一帧这里刷回 model；/pet reset 走回包采纳与 30s 对账进来。
+          model.bond = { affinity: bondState.affinity, familiarity: bondState.familiarity }
           director.step(dt)               // V3b 的演出权威：意图与合演。**顺序是语义**：先落定、再决策
         }
         if (!stopped) rafId = requestAnimationFrame(frame)
@@ -1410,6 +1498,7 @@ window.__ModuleLoader__.load({
       rafId = requestAnimationFrame(frame)
       // 诱因轮询：1s 一拍（手调值，V4 需要再加配置项）。后台标签页照轮 —— 诱因不该因切标签丢掉。
       let since = null   // null = 还没学水位
+      let lastStimulusAt = Date.now()
       const poll = async () => {
         try {
           const q = since === null ? '' : '?since=' + since
@@ -1420,19 +1509,39 @@ window.__ModuleLoader__.load({
           const cur = Number(body && body.cursor)
           if (!Number.isFinite(cur)) return
           if (since !== null && cur < since) since = null      // host 重启：水位回退，重新起步
-          for (const s of (body && body.stimuli) || []) deliverStimulus(minds, world.actors, s, config)
+          const batch = (body && body.stimuli) || []
+          if (batch.length > 0) lastStimulusAt = Date.now()
+          for (const s of batch) deliverStimulus(minds, world.actors, s, config)
           since = cur
+          // F1 的自愈底线：host 侧过滤后，非当前会话的 working-done 永远不会到达 ——
+          // 当前会话若长时间（180s）没有任何诱因，忙碌标记就地解除，宠不会永远卡在「状态忙碌」。
+          // 真长回合（单次大工具调用超过 3 分钟）最坏是提前回 idle，下一个诱因会把它叫醒。
+          if (Date.now() - lastStimulusAt > 180000) {
+            let cleared = false
+            for (const id of Object.keys(minds)) {
+              if (minds[id].working) { minds[id].working = false; cleared = true }
+            }
+            if (cleared) lastStimulusAt = Date.now()
+          }
         } catch (err) { /* 宿主不在时静默：桌宠不该刷屏 */ }
       }
       const stateTimer = setInterval(poll, 1000)
       poll()
       // 余额：30s 一读。档位变化才播；tier=null / kind='unavailable' 一律不播（不猜、不假装）。
+      // 黄10：没有声明 balance 的宠就不轮询（外部网络不是免费的）；首读只记档不播报 ——
+      // 不然每次刷新页面必先冒一次当前余额。
+      let balancePrimed = false
       const pollBalance = async () => {
         try {
           const res = await fetch(ROUTE_PREFIX + '/balance', { cache: 'no-store' })
           if (!res.ok) return
           const entry = await res.json()
           if (stopped) return        // V5b：同上 —— 卸载后不再播报
+          if (!balancePrimed) {
+            balancePrimed = true
+            if (entry && entry.kind === 'ok' && typeof entry.tier === 'string' && entry.tier !== '') lastTier = entry.tier
+            return
+          }
           const tier = balanceCue(entry, lastTier)
           if (tier === null) return
           const clip = tierClip(tier)
@@ -1440,13 +1549,28 @@ window.__ModuleLoader__.load({
           lastTier = tier
           for (const a of world.actors) {
             if (a.pet.balance !== true) continue   // §8：只有声明了 balance 的宠才播报
+            if (a.held || a.busy) continue         // 红3：拎着 / 合演中不插播
             a.play(clip[0], clip[1])
             a.say(tier)
           }
         } catch (err) { /* 宿主不在时静默：桌宠不该刷屏 */ }
       }
-      const balanceTimer = setInterval(pollBalance, BALANCE_POLL_MS)
-      pollBalance()
+      let balanceTimer = null
+      if (config.cast.some((p) => p.balance === true)) {
+        balanceTimer = setInterval(pollBalance, BALANCE_POLL_MS)
+        pollBalance()
+      }
+      // 橙6（另一半）：关系 30s 对账。/pet reset 没有推送面，运行中的页面靠这里收敛到 host 真值。
+      const resyncBond = async () => {
+        try {
+          const res = await fetch(ROUTE_PREFIX + '/bond', { cache: 'no-store' })
+          if (!res.ok) return
+          const body = await res.json()
+          if (stopped || !body || !body.pairs) return
+          bondState = Object.assign({ pairKey: bondState.pairKey }, normalizeBondPair(body.pairs[bondState.pairKey]))
+        } catch (err) { /* 宿主不在时静默 */ }
+      }
+      const bondResyncTimer = setInterval(resyncBond, 30000)
       console.info('[dsh-kylin-pet] 舞台已就绪：' + config.cast.map((p) => p.id).join(' + '))
 
       /* V5b：**把舞台完整交还出去**。apply 的 effect disposer 调它。
@@ -1456,7 +1580,23 @@ window.__ModuleLoader__.load({
         stopped = true
         if (rafId) { try { cancelAnimationFrame(rafId) } catch (err) { /* 已取消 */ } rafId = 0 }
         clearInterval(stateTimer)
-        clearInterval(balanceTimer)
+        if (balanceTimer !== null) clearInterval(balanceTimer)
+        clearInterval(bondResyncTimer)
+        // 橙5：关插件不丢账 —— 队列里还有没提交的 delta 就先补一发（keepalive 让它在
+        // 模块卸载后仍有机会发出去），然后再清防抖计时器。
+        if (bondQueue.length > 0) {
+          const events = bondQueue.slice()
+          try {
+            const sending = fetch(ROUTE_PREFIX + '/bond', {
+              method: 'PUT',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ events: events }),
+              cache: 'no-store',
+              keepalive: true,
+            })
+            if (sending && typeof sending.catch === 'function') sending.catch(() => { /* 尽力而为 */ })
+          } catch (err) { /* 尽力而为：关插件瞬间的失败不再重试 */ }
+        }
         if (bondTimer !== null) { clearTimeout(bondTimer); bondTimer = null }
         for (const a of world.actors) {
           if (a.sayTimer) { clearTimeout(a.sayTimer); a.sayTimer = null }
@@ -1476,7 +1616,7 @@ window.__ModuleLoader__.load({
       INTENTS, TUNING,
       // V5：两张文案表 + 应和句也挂出来 —— 它们要能被跨 realm 单测逐字钉住，
       // 否则「代码里写了什么词」只能靠人读源码确认。
-      LINES_STIMULUS, LINES_WORKING, ECHO_DONE,
+      LINES_STIMULUS, LINES_WORKING, LINES_TASK, ECHO_DONE, memeUrlOf,
       pairId, normalizeBondPair, applyBondEvents, tierOf, tierClip, balanceCue, curiosityOf,
       readBond, queueBondEvent,
       createMind, stepMind, unlocked, socialGate, chooseIntent,

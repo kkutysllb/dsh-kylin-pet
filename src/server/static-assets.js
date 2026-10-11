@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { MEME_EXT, ANIM_EXT } from '../shared/contract.js'
 import { PACKAGE_DIR, dshHome } from './pet-config.js'
@@ -66,5 +66,39 @@ export function createAssetResolver(opts) {
       return { path: candidate, mime: kind === 'pet' ? 'video/webm' : 'image/png', size: st.size }
     }
     return null
+  }
+}
+
+/**
+ * 梗图清单（v0.1.1 S4）：GET /memes/<petId>/index.json 的后端。
+ * 返回该宠可用的梗图**基名**数组（不含扩展名），用户目录 ∪ 包内出厂、isSafeName 过滤。
+ * 目录不存在（如 xisha 的 whale-memes 素材尚未绘制）→ 空数组 —— client 回退文字气泡，
+ * 素材落位即自动亮，不改代码。
+ *
+ * @param {{config: object, packageDir?: string, home?: string}} opts
+ * @returns {(petId: string) => string[] | null} null = petId 不在 cast 白名单里
+ */
+export function createMemeIndex(opts) {
+  const config = opts.config
+  const packageDir = opts.packageDir || PACKAGE_DIR
+  const home = opts.home || dshHome()
+  const byId = new Map(config.cast.map((pet) => [pet.id, pet]))
+  const userRoot = join(home, 'dsh-kylin-pet', 'pet')
+  const packageRoot = join(packageDir, 'assets', 'pet')
+
+  return function memeIndex(petId) {
+    const pet = byId.get(String(petId || ''))
+    if (!pet) return null
+    const names = new Set()
+    for (const root of [userRoot, packageRoot]) {
+      const dir = join(root, pet.memeDir)
+      let entries
+      try { entries = readdirSync(dir) } catch { continue }   // 目录缺席/不可读：这一层就当没有
+      for (const name of entries) {
+        if (!isSafeName(name) || !name.endsWith(MEME_EXT)) continue
+        names.add(name.slice(0, -MEME_EXT.length))
+      }
+    }
+    return Array.from(names).sort()
   }
 }

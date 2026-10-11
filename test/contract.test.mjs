@@ -25,7 +25,7 @@ test('契约是冻结的（防运行期被改）', () => {
   assert.throws(() => { ASSET.W = 1 }, TypeError)
   assert.throws(() => { CLIPS.idle = [] }, TypeError)
   assert.ok(LOOPING.length === 2 && LOOPING.includes('idle') && LOOPING.includes('walk'))
-  assert.equal(KINDS.length, 5)
+  assert.equal(KINDS.length, 8)   // 5 回合边界/执行期 + 3 任务跟随（F2）
   assert.ok(Object.isFrozen(KINDS))
   // V5：分类表与它内部的每个数组都必须冻结 —— 它被 host 与 client 同时读，
   // 运行期被谁改一格，两边就会对同一个工具说出不同的话，而且不会有任何测试红。

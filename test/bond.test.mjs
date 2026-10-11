@@ -131,3 +131,29 @@ test('reset：清空账本**并落盘**（走同一个 flush 路径，不另写�
   assert.equal(Object.keys(JSON.parse(readFileSync(path, 'utf8')).pairs).length, 0, '磁盘文件必须也被清空')
 })
 
+
+// ── v0.1.1 黄11：事件幂等（PUT 重试窗口双记防护）──────────────────────────
+
+test('幂等：同一 id 的事件重放只记一次；不同 id 照常各记各的', () => {
+  const path = tmpPath()
+  const store = createBondStore({ path })
+  const ev = { id: 'evt-1', pair: 'kylinzi|xisha', kind: 'bump', affinityDelta: 2, familiarityDelta: 1, at: 5 }
+  store.apply([ev])
+  store.apply([ev])                                   // 原样重放
+  store.apply([{ id: 'evt-1', pair: 'kylinzi|xisha', kind: 'bump', affinityDelta: 2, familiarityDelta: 1, at: 6 }])  // 内容变了的同 id
+  const p = store.snapshot().pairs['kylinzi|xisha']
+  assert.equal(p.affinity, 2, '三连发同 id 只该记一笔')
+  assert.equal(p.history.length, 1)
+  assert.equal(p.lastAt, 5, '被去重的重放不得推进 lastAt')
+  store.apply([{ id: 'evt-2', pair: 'kylinzi|xisha', kind: 'bump', affinityDelta: 2, familiarityDelta: 1, at: 7 }])
+  assert.equal(store.snapshot().pairs['kylinzi|xisha'].affinity, 4)
+})
+
+test('幂等：无 id 的事件不进去重环（老客户端照常落账）', () => {
+  const path = tmpPath()
+  const store = createBondStore({ path })
+  const ev = { pair: 'kylinzi|xisha', kind: 'bump', affinityDelta: 2, familiarityDelta: 1, at: 5 }
+  store.apply([ev])
+  store.apply([ev])
+  assert.equal(store.snapshot().pairs['kylinzi|xisha'].affinity, 4, '没有幂等键就按老行为逐笔落')
+})

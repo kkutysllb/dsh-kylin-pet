@@ -61,3 +61,12 @@ test('at 走注入时钟', () => {
   b.push('turn-ok', '')
   assert.equal(b.all[0].at, 42)
 })
+
+test('v0.1.1：push 带 session 字段，缺省空串（F1 留证）', () => {
+  const b = createBoard()
+  b.push('turn-ok', 'x', 'session-9')
+  b.push('waiting', '')
+  assert.equal(b.all[0].session, 'session-9')
+  assert.equal(b.all[1].session, '')
+  assert.equal(b.since(0)[0].session, 'session-9', 'since 透出时不丢字段')
+})

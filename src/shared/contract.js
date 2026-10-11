@@ -45,7 +45,12 @@ export const BUSY_CLIP = '状态忙碌'
  * `working` / `working-done` 是 V5 加的「执行期」面：前三个都在**回合边界**，
  * 回合开始到结束之间原本没有任何信号，所以任务执行时两只宠完全安静。
  */
-export const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting', 'working', 'working-done'])
+export const KINDS = Object.freeze([
+  'turn-ok', 'turn-fail', 'waiting', 'working', 'working-done',
+  // v0.1.1 任务跟随（F2）：待办清单与后台任务的三个边界。
+  // detail 约定：task-progress/task-done 带 "已完成/总数"（如 "3/7"）；task-start 带起手时进度。
+  'task-start', 'task-progress', 'task-done',
+])
 
 /**
  * 工具分类表 —— **唯一真源**。host 用它分类、client 用它出文案，两边都不许各写一份。

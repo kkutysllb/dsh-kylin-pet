@@ -101,7 +101,7 @@ test('createMind：默认 bond 让「尚未赋 bond 的心智」不抛，社交�
   }
 })
 
-test('deliverStimulus：turn-fail 只改心智 —— 没有任何 actor.play 被同步调用', () => {
+test('deliverStimulus：turn-fail 改心智 + 出气泡（黄9），仍然不点播', () => {
   const actors = [mkActor('kylinzi', 0, 0), mkActor('xisha', 200, 0)]
   const minds = mkMinds(actors)
   const touched = C.deliverStimulus(minds, actors, { kind: 'turn-fail' }, CONFIG)
@@ -109,9 +109,11 @@ test('deliverStimulus：turn-fail 只改心智 —— 没有任何 actor.play �
   assert.equal(minds.xisha.mood, -0.45, 'mood 必须被推动')
   assert.equal(minds.kylinzi.mood, 0, '不在名单里的宠不许被碰')
   assert.equal(actors[0].plays.length, 0)
-  assert.equal(actors[1].plays.length, 0, '核心证据：V2 会立刻 play，V3b 必须为 0')
+  assert.equal(actors[1].plays.length, 0, '核心证据：不点播档位的红线不动 —— 气泡不是档位')
   assert.equal(actors[1].clip, null)
-  assert.equal(actors[1].says.length, 0, 'turn-fail 不改气泡')
+  // v0.1.1 黄9：回合成败必须可见 —— turn-fail 说「让我想想」（waiting 先例：诱因可以说）。
+  assert.equal(actors[1].says.length, 1)
+  assert.equal(actors[1].says[0], '让我想想')
 })
 
 test('deliverStimulus：turn-ok 抬 mood/energy 且夹取，仍然不点播', () => {
@@ -128,7 +130,7 @@ test('deliverStimulus：turn-ok 抬 mood/energy 且夹取，仍然不点播', ()
   assert.equal(actors[1].plays.length, 0)
 })
 
-test('deliverStimulus：waiting 是双方探头 —— 只置 attention 与气泡，不点播', () => {
+test('deliverStimulus：waiting 是双方探头 —— 只冒气泡，不点播；attention 死字段已删（黄9）', () => {
   const actors = [mkActor('kylinzi', 0, 0), mkActor('xisha', 200, 0)]
   const minds = mkMinds(actors)
   const touched = C.deliverStimulus(minds, actors, { kind: 'waiting' }, CONFIG)
@@ -138,8 +140,8 @@ test('deliverStimulus：waiting 是双方探头 —— 只置 attention 与气�
     assert.equal(a.says.length, 1)
   }
   assert.equal(actors[0].says[0], '在呢')
-  assert.equal(minds.kylinzi.attention, 'drawn')
-  assert.equal(minds.xisha.attention, 'drawn')
+  // attention 原先只写不读（V3b 起「drawn」没有任何消费者）—— 死字段比死代码更贵，删除。
+  assert.equal(minds.kylinzi.attention, undefined)
 })
 
 test('deliverStimulus：被拎起或没有心智的宠不消化诱因', () => {
@@ -340,4 +342,29 @@ test('V5 deliverStimulus：任务开始时停下手里的事（清 target），�
   actors[0].target = { x: 1, y: 2 }
   C.deliverStimulus(minds, actors, { kind: 'working-done', detail: '' }, V5CFG)
   assert.deepEqual(actors[0].target, { x: 1, y: 2 }, '收工不该动 target（那时它该自由活动）')
+})
+
+// ── v0.1.1 F2/S4：任务跟随气泡 + 梗图回退 ────────────────────────────────
+
+test('F2 task 三态：接活 / 进度(3/7) / 收工，只有主讲开口，仍然不点播', () => {
+  const actors = [mkActor('kylinzi', 0, 0), mkActor('xisha', 200, 0)]
+  const minds = mkMinds(actors)
+  C.deliverStimulus(minds, actors, { kind: 'task-start', detail: '0/7' }, CONFIG)
+  assert.deepEqual(actors[0].says, ['接活了'])
+  C.deliverStimulus(minds, actors, { kind: 'task-progress', detail: '3/7' }, CONFIG)
+  assert.equal(actors[0].says[1], '3/7', '进度直接说 detail')
+  C.deliverStimulus(minds, actors, { kind: 'task-done', detail: '7/7' }, CONFIG)
+  assert.equal(actors[0].says[2], '收工！')
+  assert.ok(minds.kylinzi.mood > 0, '收工抬心情')
+  for (const a of actors) assert.equal(a.plays.length, 0, '诱因不点播的红线不动')
+  assert.equal(canon(C.deliverStimulus(minds, actors, { kind: 'task-done', detail: '7/7' }, CONFIG)), canon(['kylinzi']), '主讲 = workStatus ok 线')
+})
+
+test('S4 memeUrlOf：清单没拉到（空）一律回 null 走文字；非 cast 的宠也 null', () => {
+  assert.equal(C.memeUrlOf('kylinzi', '稳了'), null)
+  assert.equal(C.memeUrlOf('nobody', '稳了'), null)
+})
+
+test('S4 LINES_TASK 逐字钉住（原创文案，不许漂；跨 realm 用 canon 比较）', () => {
+  assert.equal(canon(C.LINES_TASK), canon({ 'task-start': '接活了', 'task-done': '收工！' }))
 })

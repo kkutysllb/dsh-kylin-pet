@@ -248,3 +248,43 @@ test('Task5c·7 freePartner 不招募正在干活的宠（否则合演会把忙�
   assert.equal(s2.A.target, undefined, '也不该被设 target（设了 idleChain 就早退，忙碌档播不出来）')
 })
 
+
+// ── v0.1.1 红1：contest 胜负反转回归 ─────────────────────────────────────
+
+test('红1 contest：先到者得 —— 世界清了到站者的 target 也不再反转胜负', () => {
+  const A = mkActor('kylinzi', 100, 100)
+  const B = mkActor('xisha', 500, 100)
+  // contest 的 open 阶段带 say: 'contest' —— 替身要能接台词（本文件的 mkActor 没有这一面）。
+  for (const a of [A, B]) { a.says = []; a.say = (t) => a.says.push(t) }
+  const world = { actors: [A, B], pairKey: 'kylinzi|xisha' }
+  const minds = {}
+  for (const a of world.actors) {
+    const m = C.createMind(a.pet.id)
+    m.bond = { affinity: 0, familiarity: 0 }
+    m.x = a.x; m.y = a.y
+    minds[a.pet.id] = m
+  }
+  const events = []
+  const d = C.createDirector({
+    world: world, minds: minds,
+    model: { bond: { affinity: 0, familiarity: 0 } },
+    rng: () => 0.5,
+    onStimulus: (ev) => events.push(ev),
+  })
+  d.open(A, B, 'contest', 0)
+  d.step(0.01)                 // enterPhase：point = 两宠当前中点 (300,100)，target 指向它
+  // 模拟世界推进 1.5s：A 先到中点（世界到点即清 target），B 还在半路
+  A.x = 300; A.y = 100; A.target = null
+  B.target = { x: 300, y: 100 }
+  // 旧实现的判据在这里给出反转让它输：distToTarget(A)=Infinity、B=200 ⇒ winner=B。
+  // 新实现只看到场中点的实际距离：A=0、B=200 ⇒ winner=A（先到者得，spec §7）。
+  d.step(1.6)                  // approach 结束，定胜负
+  for (let i = 0; i < 30 && d.duet; i++) d.step(0.5)   // 把 open/exchange/settle 演完
+  assert.equal(d.duet, null, 'contest 应当完整演到 settle')
+  assert.equal(events.length, 1)
+  assert.equal(events[0].kind, 'contest')
+  assert.equal(events[0].affinityDelta, 2)
+  // 可见证据：exchange 的 happy 只给 winner（=A）。旧实现下 happy 会落到 B。
+  assert.ok(A.plays.indexOf('happy') >= 0, '先到者必须拿到 winner 的 happy')
+  assert.equal(B.plays.indexOf('happy'), -1, '后到者不得冒领 winner 的 happy')
+})

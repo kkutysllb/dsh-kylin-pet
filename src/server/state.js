@@ -18,11 +18,19 @@ export function createBoard(opts = {}) {
   let items = []
 
   return {
-    /** 记一条诱因，返回它的 seq。未知 kind 直接抛 —— 静默丢弃会让「宠没反应」变成悬案。 */
-    push(kind, detail) {
+    /**
+     * 记一条诱因，返回它的 seq。未知 kind 直接抛 —— 静默丢弃会让「宠没反应」变成悬案。
+     * session（v0.1.1 F1）：产生这条诱因的会话 id（来源不打标，「跟随当前会话」就没法对账）。
+     * 缺省空串 = 来源未知/全局 —— 已由 stimuli 层过滤，这里只负责如实带出。
+     */
+    push(kind, detail, session) {
       if (KINDS.indexOf(kind) < 0) throw new Error('unknown stimulus kind: ' + kind)
       cursor += 1
-      const line = { seq: cursor, kind: kind, at: now(), detail: detail === undefined ? '' : String(detail) }
+      const line = {
+        seq: cursor, kind: kind, at: now(),
+        detail: detail === undefined ? '' : String(detail),
+        session: session === undefined || session === null ? '' : String(session),
+      }
       items = items.concat([line])
       if (items.length > capacity) items = items.slice(items.length - capacity)
       return cursor

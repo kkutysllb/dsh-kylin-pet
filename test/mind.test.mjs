@@ -160,3 +160,23 @@ test('chooseIntent 不修改任何状态（决策与推进分离）', () => {
   C.chooseIntent(self, other, () => 0.42)
   assert.equal(canon([self, other]), before)
 })
+
+// ── v0.1.1 黄9：放下后的 2s 免疫落地 ─────────────────────────────────────
+
+test('immune：放下置 2s，stepMind 递减，socialGate 在免疫期内拒绝', () => {
+  const m = C.createMind('kylinzi')
+  m.immune = 2
+  assert.equal(C.socialGate('greet', m, { held: false, busy: false, x: 0, y: 0 }, 10), 'immune', '免疫期内不开合演')
+  C.stepMind(m, 1.0)
+  assert.ok(m.immune > 0 && m.immune < 2, '免疫随时间递减')
+  assert.equal(C.socialGate('greet', m, { held: false, busy: false, x: 0, y: 0 }, 10), 'immune', '没减完仍然拒绝')
+  C.stepMind(m, 1.0)
+  assert.equal(m.immune, 0, '减到 0 就停（不出现负数）')
+  assert.notEqual(C.socialGate('greet', m, { held: false, busy: false, x: 0, y: 0 }, 10), 'immune', '免疫期结束不再以 immune 淘汰')
+})
+
+test('immune：缺字段的心智（老形状）不受影响', () => {
+  const m = C.createMind('xisha')
+  assert.equal(m.immune, 0)
+  assert.notEqual(C.socialGate('greet', m, { held: false, busy: false, x: 0, y: 0 }, 10), 'immune')
+})

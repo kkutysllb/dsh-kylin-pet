@@ -168,7 +168,9 @@ test('queueBondEvent 防抖 2s：连发合并成一次 PUT；失败保留队列�
     if (!opt || opt.method !== 'PUT') return Promise.reject(new Error('本用例只该发 PUT：' + url))
     puts.push(JSON.parse(opt.body))
     if (fail) return Promise.reject(new Error('offline'))
-    return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: 1, pairs: {} }) })
+    // 橙6：真 host 的回账是「施加后的完整快照」，必含刚落的那一对 —— 桩按真实形状回，
+    // 顺带钉住「无条件采纳」不会把刚落的关系抹掉；而 pairs 为空（reset）时它就是归零路径。
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({ version: 1, pairs: { 'kylinzi|xisha': { affinity: 6, familiarity: 3, lastAt: 3, history: [] } } }) })
   }
   const client = loadClient({
     fetch: fetchStub,
