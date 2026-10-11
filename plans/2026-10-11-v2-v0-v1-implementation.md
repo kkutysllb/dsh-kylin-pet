@@ -1399,7 +1399,7 @@ test('client 与 host 契约逐键对齐（允许重复，禁止漂移）', () =
 test('client 只暴露 inject / apply / __kylinContract', () => {
   const client = loadClient()
   assert.deepEqual(Object.keys(client).sort(), ['__kylinContract', 'apply', 'inject'])
-  assert.deepEqual(client.inject, [])
+  assert.deepEqual(canon(client.inject), canon([]))   // 跨 realm：client 的数组不是本 realm 的 Array 实例
   assert.equal(typeof client.apply, 'function')
 })
 
@@ -1525,13 +1525,28 @@ git commit -m 'test(harness): 开发期验收台（真 host 模块 -> 真浏览�
 
 **为什么要脚本化**：spec §11.3 明写「不以『用户刷新一下看看』作为验收」。以下步骤跑完，V1 才算完。
 
+> **执行期更正（Lead 实测，2026-10-11）：取证产物不能放 `staging/`。**
+> 原文写「截图存 `staging/v1/…`」并在 Step 5 `git add staging/v1` —— **实测 exit 1**：`The following paths are ignored by one of your .gitignore files: staging`。
+> 而且**不能**用 `git add -f` 绕过：clean-room 门的**结构判据 A** 就是「`staging/**` 不得进入 git 索引」。
+> 故取证目录改用 **`evidence/v1/`**（不在 .gitignore、也不在门禁的 SOURCE_GLOBS 里）。
+>
+> **本机 Playwright 可用（已实测）**：仓库内没有 node_modules，`require('playwright')` 解析不到；全局包在
+> `/opt/homebrew/lib/node_modules/playwright`，浏览器在 `~/Library/Caches/ms-playwright`。可用的引导方式：
+> ```js
+> import { createRequire } from 'node:module'
+> const require = createRequire('/opt/homebrew/lib/node_modules/')
+> const { chromium } = require('playwright')
+> const b = await chromium.launch()
+> ```
+> 实测结果：headless Chromium 正常启动，中文渲染正常，截图为真（800x450 → 7712 字节）。
+
 - [ ] **Step 1: 起验收台**
 
 用后台作业跑 `node tools/harness.mjs 7391`，等它打印 `harness: http://127.0.0.1:7391`。
 
 - [ ] **Step 2: 双宠同框 —— 待机**
 
-Playwright：`browser_navigate` -> `http://127.0.0.1:7391`，等 3s，截图存 `staging/v1/01-idle.png`。
+Playwright：打开 `http://127.0.0.1:7391`，等 3s，截图存 **`evidence/v1/01-idle.png`**。
 
 然后用 `browser_evaluate` 断言（只看 DOM，不依赖内部闭包）：
 
@@ -1554,8 +1569,8 @@ Expected: `actors:2`、`videos:4`、两条 transform 不同。
 
 - [ ] **Step 4: 点击 + 拖到一起放下 + 边界**
 
-1. `browser_click` 麒麟仔的命中区（其 `> div:last-child`）→ 截图 `staging/v1/02-click-happy.png`（前台 video 的 src 应命中 `CLIPS.happy` 的某个别名）。
-2. `browser_drag`：从麒麟仔命中区拖到鲸鱼娘命中区放下 → 截图 `staging/v1/03-dropped-together.png`，并断言两只的朝向组合为「相对」（`bump()` 的可见后果）。
+1. 点击麒麟仔的命中区（其 `> div:last-child`）→ 截图 **`evidence/v1/02-click-happy.png`**（前台 video 的 src 应命中 `CLIPS.happy` 的某个别名）。
+2. 拖拽：从麒麟仔命中区拖到鲸鱼娘命中区放下 → 截图 **`evidence/v1/03-dropped-together.png`**，并断言两只的朝向组合为「相对」（`bump()` 的可见后果）。
 3. 边界：把一只拖到视口外再松手，断言下一帧它被 clamp 回视口内。
 
 - [ ] **Step 5: 结论写回计划并 Commit**
@@ -1563,7 +1578,7 @@ Expected: `actors:2`、`videos:4`、两条 transform 不同。
 在本文件末尾**新增一节「V1 取证记录」**，把三张截图路径 + 四条断言的实际输出写进去，然后：
 
 ```bash
-git add staging/v1 plans/2026-10-11-v2-v0-v1-implementation.md
+git add evidence/v1 plans/2026-10-11-v2-v0-v1-implementation.md
 git commit -m 'test(v1): 真浏览器取证（双宠同框/点击/拖到一起/边界）'
 ```
 
