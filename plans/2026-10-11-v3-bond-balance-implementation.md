@@ -294,6 +294,10 @@ import { BALANCE_TIERS } from '../shared/contract.js'
 
 /** 档位判定：字符串原样保留，数值只用于比较；解析不出有限数就 null（不猜）。 */
 export function tierOf(total) {
+  // 空串 / null 不是「余额 0」，是「取不到」—— 读成 0 会报「见底」，
+  // 那是对用户说了我们并不知道的话（§11.7）。这是执行期实测出来的计划自相矛盾。
+  if (total === null || total === undefined) return null
+  if (typeof total === 'string' && total.trim() === '') return null
   const n = typeof total === 'string' ? Number(total.trim()) : Number(total)
   if (!Number.isFinite(n)) return null
   for (const entry of BALANCE_TIERS) if (n >= entry[1]) return entry[0]
