@@ -613,6 +613,61 @@ window.__ModuleLoader__.load({
         return done
       }
 
+      /** 按 id 找演员；找不到回 null（不抛）。 */
+      function actorById(id) { return world.actors.find((a) => a.pet.id === id) || null }
+
+      /** 本阶段的声明；剧本或阶段缺失回 null。 */
+      function phaseSpec(kind, phase) {
+        const s = SCRIPTS[kind]
+        return s && s.phases ? (s.phases[phase] || null) : null
+      }
+
+      /** 进入新阶段的一次性动作：播片 / 设朝向 / 放台词 / 起步。只在 sincePhase === 0 那一拍做。 */
+      function enterPhase(spec, actorA, actorB) {
+        if (spec.clip) {
+          if (actorA) actorA.play(spec.clip)
+          if (actorB && spec.clip === 'happy') actorB.play(spec.clip)
+        }
+        if (spec.facing === 'toward' && actorA && actorB) actorA.setFacing(actorB.x < actorA.x ? -1 : 1)
+        if (spec.say) {
+          const line = LINES[spec.say]
+          if (line && actorA) actorA.say(typeof line === 'string' ? line : (line[actorA.pet.id] || line[actorB.pet.id] || ''))
+        }
+        if (spec.move === 'toward' && actorA && actorB) {
+          const gap = ASSET.W * 0.28
+          actorA.target = { x: actorB.x + (actorA.x <= actorB.x ? gap : -gap), y: actorB.y }
+        }
+      }
+
+      /** 推进一拍。返回 'settled' / 'aborted' / null（仍在演）。 */
+      function runDuet(dt) {
+        const actorA = actorById(duet.initiator)
+        const actorB = actorById(duet.responder)
+        const spec = phaseSpec(duet.kind, duet.phase)
+        if (!spec) { abort('no-phase'); return 'aborted' }
+        // sincePhase 由执行器第一拍惰性补上（计划 Step 2 采纳的执行期修正 2026-10-11）：
+        // open() 的返回对象形状保持 Task 3 的原样，test/director.test.mjs 的逐键断言才保住判别力。
+        if (duet.sincePhase === undefined) duet.sincePhase = 0
+        if (duet.sincePhase === 0) enterPhase(spec, actorA, actorB)
+        duet.sincePhase += dt
+        const done = spec.until && ADVANCE[spec.until] ? ADVANCE[spec.until](duet, world) : true
+        if (!done) return null
+        const i = PHASES.indexOf(duet.phase)
+        if (i < PHASES.length - 1) {
+          duet.phase = PHASES[i + 1]
+          duet.sincePhase = 0
+          duet.deadline = TUNING.PHASE_TIMEOUT_SEC[duet.phase]
+          return null
+        }
+        const script = SCRIPTS[duet.kind]
+        const eff = Array.isArray(script.effect)
+          ? (bondOf().affinity >= 0 ? script.effect[0] : script.effect[1])
+          : script.effect
+        settle(duet.kind, actorA, actorB, eff, clock)
+        duet = null
+        return 'settled'
+      }
+
       /** 每拍推进一次合演。返回本拍发生的事（给测试与取证观察）。 */
       function step(dt) {
         clock += dt                      // 时钟只在这里走
@@ -624,13 +679,16 @@ window.__ModuleLoader__.load({
 
         if (duet) {
           // 对手被拎走 ⇒ 立即中断（spec §6）
-          const held = world.actors.find((a) => a.pet.id === duet.responder || a.pet.id === duet.initiator)
-          if (held && held.held) { events.push({ type: 'abort', detail: abort('partner-held') }); return events }
+          // D3 修正：必须先筛「被拎起的」，再判断它是不是本场两只之一。
+          // 原文 find((a) => a.pet.id === duet.responder || a.pet.id === duet.initiator)
+          // 返回的是数组里第一个匹配任一 id 的 actor —— 实际只检查了一只，
+          // 拎起另一只不会中断（执行期实测：拎 responder → events=[]，duet 仍在）。
+          const held = world.actors.find((a) => a.held && (a.pet.id === duet.responder || a.pet.id === duet.initiator))
+          if (held) { events.push({ type: 'abort', detail: abort('partner-held') }); return events }
           duet.deadline -= dt
           if (duet.deadline <= 0) { events.push({ type: 'abort', detail: abort('timeout') }); return events }
-          const i = PHASES.indexOf(duet.phase)
-          // 阶段推进由剧本的 phaseSignal 决定；这里只做兜底推进，避免卡死
-          if (duet.advance) { duet.phase = PHASES[Math.min(PHASES.length - 1, i + 1)]; duet.deadline = TUNING.PHASE_TIMEOUT_SEC[duet.phase] }
+          const r = runDuet(dt)
+          if (r) events.push({ type: r === 'settled' ? 'settle' : 'abort', detail: r })
           return events
         }
 
@@ -771,12 +829,12 @@ window.__ModuleLoader__.load({
     const ADVANCE = {
       near:      (d, w) => dist(d, w) <= TUNING.NEAR_RADIUS,
       veryNear:  (d, w) => dist(d, w) <= TUNING.NEAR_RADIUS * 0.6,
-      turned:    (d, w) => w.sincePhase >= 0.4,        // 转身动作放完约 0.4s
-      once:      (d, w) => w.sincePhase >= 0.6,        // 一次性档播完就够
-      immediate: (d, w) => w.sincePhase >= 0.2,
-      hold3s:    (d, w) => w.sincePhase >= 3.0,
-      hold4s:    (d, w) => w.sincePhase >= 4.0,
-      arrived:   (d, w) => w.sincePhase >= 1.5,        // 争抢：谁先到由 world 的位置比较决定，这里只做兜底
+      turned:    (d) => d.sincePhase >= 0.4,        // 转身动作放完约 0.4s
+      once:      (d) => d.sincePhase >= 0.6,        // 一次性档播完就够
+      immediate: (d) => d.sincePhase >= 0.2,
+      hold3s:    (d) => d.sincePhase >= 3.0,
+      hold4s:    (d) => d.sincePhase >= 4.0,
+      arrived:   (d) => d.sincePhase >= 1.5,        // 争抢：谁先到由 world 的位置比较决定，这里只做兜底
     }
 
     /* ==================== §4 世界（唯一位移权威） ==================== */
