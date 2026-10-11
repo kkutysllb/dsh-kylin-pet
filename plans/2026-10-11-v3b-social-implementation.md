@@ -532,5 +532,93 @@ const ADVANCE = {
 
 Run: `npm test` → Expected: **114 pass / 0 fail**（103 + 11）。
 
+---
+
+## Task 5: 接回主循环（`src/stage/client.js`）
+
+**Files:** Modify `src/stage/client.js`、`test/client-contract.test.mjs`；Create `test/client-v3b.test.mjs`
+
+### Step 1: 心智与导演进世界
+
+```js
+/* 在 createWorld 之后、start 的主循环之前建起来（V3 已经读过 /bond）。 */
+const minds = {}
+for (const a of world.actors) {
+  const m = createMind(a.pet.id)
+  m.bond = bondFor(a.pet.id)        // V3 读回的账本快照；读不到就是 {affinity:0, familiarity:0}
+  minds[a.pet.id] = m
+}
+const director = createDirector({
+  world: world,
+  minds: minds,
+  model: { bond: bondFor('*') },    // 双方共用一对账本：pairKey 已由 V3 定好
+  rng: Math.random,
+  onStimulus: queueBondEvent,       // ← V3 的防抖写入口；导演**不自己发请求**
+})
+```
+
+### Step 2: 主循环交给导演（**`world.step` 之后、`requestAnimationFrame` 之前**）
+
+```js
+const frame = (now) => {
+  const dt = Math.min(0.05, (now - last) / 1000)
+  last = now
+  if (!document.hidden) {
+    world.step(dt)                  // V1 的位移权威：位置仍然只由世界改
+    director.step(dt)               // V3b 的演出权威：意图与合演
+  }
+  requestAnimationFrame(frame)
+}
+```
+
+> **顺序是语义**：先 `world.step`（位置落定）再 `director.step`（基于落定后的位置做决策）。反过来会让导演读到上一帧的位置，合演触发看起来「慢半拍」。
+
+### Step 3: V2 的 `react()` 改名 `deliverStimulus()`，行为改为「交给心智」
+
+V2 是「有资格就演」。spec §8 要求的是「**诱因 → 心智消化**」，所以：
+
+```js
+/** 诱因不再直接点播动画，而是**推动心智状态**；下一拍由导演决定这只宠要做什么。 */
+function deliverStimulus(stimulus) {
+  const ids = qualified(stimulus.kind, config)
+  const touched = []
+  for (const id of ids) {
+    const m = minds[id]
+    const a = world.actors.find((x) => x.pet.id === id)
+    if (!m || !a || a.held) continue
+    if (stimulus.kind === 'turn-ok') { m.mood = clamp(m.mood + 0.35, -1, 1); m.energy = clamp(m.energy + 0.1, 0, 1) }
+    if (stimulus.kind === 'turn-fail') { m.mood = clamp(m.mood - 0.45, -1, 1) }
+    if (stimulus.kind === 'waiting') { m.attention = 'drawn'; a.say(LINES_STIMULUS.waiting) }
+    touched.push(id)
+  }
+  return touched
+}
+```
+
+> **这条改动的可观测差别**：V2 里注入 `agent/error` 会**立刻**看到宠换难过档；V3b 里同一注入只改 `mood`，**下一拍**才由心智决定演什么（可能先安慰、也可能继续散步——取决于 `TUNING`）。
+> **取证必须能分辨这两者**，否则「改成心智了」这句话没有证据（Task 6 的验收句之一就是盯这个）。
+
+### Step 4: 点击的「好奇凑过来」用真 affinity（去掉 V1 写死的 50%）
+
+V1 的 `release()` 里是 `Math.random() < 0.5`。改成：
+
+```js
+const bond = minds[a.pet.id].bond || { affinity: 0, familiarity: 0 }
+const p = clamp(0.5 + bond.affinity / 200, 0.05, 0.95)   // affinity 越高越愿意凑过来
+if (mate && !mate.held && Math.random() < p) { … }
+```
+
+### Step 5: 测试 `test/client-v3b.test.mjs`
+
+把 `createMind` / `stepMind` / `chooseIntent` / `createDirector` / `SCRIPTS` / `ADVANCE` 全部挂进 `__kylinContract`（**纯逻辑，无 DOM**），跨 realm 调：
+1. **`deliverStimulus` 不再直接换档**：注入 `turn-fail` 后，断言**没有任何 actor 的 `play` 被同步调用**、但对应 mind 的 `mood` 掉了 —— 这条是「改成心智」的**核心证据**（用注入的桩 `play` 计数）；
+2. **点概率随 affinity 变**：`affinity = 0` → 0.5；`affinity = +100` → 0.95（夹住）；`affinity = -100` → 0.05；
+3. **导演在对方被拎起时不配对**（`freePartner` 跳过 held）；
+4. **`settle` 走的是注入的 `onStimulus`**（桩函数被调一次、参数里有 `pair/kind/affinityDelta`）；
+5. **冷却生效**：同一剧本 settle 两次，第二次被 `socialGate` 以 `cooldown` 淘汰。
+
+Run: `npm test` → Expected: **124 pass / 0 fail**（114 + 10）。
+
+
 
 
