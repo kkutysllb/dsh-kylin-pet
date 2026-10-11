@@ -400,6 +400,11 @@ window.__ModuleLoader__.load({
           for (let j = i + 1; j < actors.length; j++) {
             const x = actors[i]
             const y = actors[j]
+            // 被拎起的那只这一刻由**用户**定位：世界不跟用户抢位置。
+            // 不跳过的话，拖拽期间每帧都在把它们推开，松手时距离已被推到 minGap(156.8)，
+            // 而 spec §8 的「拖到一起放下触发互动」要求 ≤ DROP_DISTANCE(120) —— 永远够不着。
+            // 2026-10-11 由 V3 Task6 真浏览器取证发现（V1/V2 的取证没抓到这个）。
+            if (x.held || y.held) continue
             const minGap = (x.box.w + y.box.w) * 0.28
             const dx = y.x - x.x
             if (Math.abs(dx) > minGap) continue
