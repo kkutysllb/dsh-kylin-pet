@@ -99,10 +99,20 @@ const PAGE = [
   '<style>html,body{margin:0;height:100%;background:#0e1116;overflow:hidden}</style>',
   '</head><body>',
   '<script>',
+  // V5b：先量 rAF —— 「停掉循环」只能靠数调用，DOM 消失证不了它。
+  'window.__rafCount = 0; var __raf = window.requestAnimationFrame.bind(window)',
+  'window.requestAnimationFrame = function (cb) { window.__rafCount++; return __raf(cb) }',
   'window.__ModuleLoader__ = { load: function (m) {',
   '  var ex = m.factory(function (id) { throw new Error("harness: client 不该 require " + id) })',
   '  window.__petExports = ex',
-  '  ex.apply({})',
+  // 真系统在关掉插件开关时会等插件的异步 effect 收尾，插件靠 ctx.effect 交还舞台；
+  // 替身必须把这个能力给出去，否则验收够不到那条路。
+  '  // 替身提供 ctx.effect（真系统靠它卸载模块）',
+  '  var disposers = []',
+  '  var ctx = { effect: function (cb, label) { var d = cb(); if (typeof d === "function") disposers.push(d); return d } }',
+  '  window.__petDisposers = function () { return disposers.length }',
+  '  window.__petDispose = function () { var n = 0; while (disposers.length) { var d = disposers.pop(); if (typeof d === "function") { d(); n++ } } return n }',
+  '  ex.apply(ctx)',
   '} }',
   '</script>',
   '<script src="/client.js"></script>',

@@ -13,6 +13,7 @@
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\"",
     "harness": "node tools/harness.mjs",
+    "accept:v5b": "node tools/v5b-teardown.mjs",
     "check": "node --check src/shared/contract.js && node --check src/server/entry.js && node --check src/server/pet-config.js && node --check src/server/static-assets.js && node --check src/server/state.js && node --check src/server/stimuli.js && node --check src/server/bond.js && node --check src/server/ledger.js && node --check src/stage/client.js && node --check tools/harness.mjs"
   },
   "license": "MIT",

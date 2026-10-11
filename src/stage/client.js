@@ -1327,7 +1327,13 @@ window.__ModuleLoader__.load({
       })
       wireGestures(world)
       let last = performance.now()
+      /* V5b：卸载闸。单靠 cancelAnimationFrame 不够 —— 若卸载正好发生在一帧**执行中**
+         （effect 与 rAF 回调同在一个宏任务队列里），帧尾那句 requestAnimationFrame 会
+         重新挂上一条谁也拿不到句柄的循环。停下这件事交给一个标志位，句柄只负责「还没跑的那次」。 */
+      let stopped = false
+      let rafId = 0
       const frame = (now) => {
+        if (stopped) return
         const dt = Math.min(0.05, (now - last) / 1000)
         last = now
         if (!document.hidden) {
@@ -1347,9 +1353,9 @@ window.__ModuleLoader__.load({
           }
           director.step(dt)               // V3b 的演出权威：意图与合演。**顺序是语义**：先落定、再决策
         }
-        requestAnimationFrame(frame)
+        if (!stopped) rafId = requestAnimationFrame(frame)
       }
-      requestAnimationFrame(frame)
+      rafId = requestAnimationFrame(frame)
       // 诱因轮询：1s 一拍（手调值，V4 需要再加配置项）。后台标签页照轮 —— 诱因不该因切标签丢掉。
       let since = null   // null = 还没学水位
       const poll = async () => {
@@ -1358,6 +1364,7 @@ window.__ModuleLoader__.load({
           const res = await fetch(ROUTE_PREFIX + '/state' + q, { cache: 'no-store' })
           if (!res.ok) return
           const body = await res.json()
+          if (stopped) return        // V5b：卸载后已在飞的续体不许再动舞台
           const cur = Number(body && body.cursor)
           if (!Number.isFinite(cur)) return
           if (since !== null && cur < since) since = null      // host 重启：水位回退，重新起步
@@ -1365,7 +1372,7 @@ window.__ModuleLoader__.load({
           since = cur
         } catch (err) { /* 宿主不在时静默：桌宠不该刷屏 */ }
       }
-      setInterval(poll, 1000)
+      const stateTimer = setInterval(poll, 1000)
       poll()
       // 余额：30s 一读。档位变化才播；tier=null / kind='unavailable' 一律不播（不猜、不假装）。
       const pollBalance = async () => {
@@ -1373,6 +1380,7 @@ window.__ModuleLoader__.load({
           const res = await fetch(ROUTE_PREFIX + '/balance', { cache: 'no-store' })
           if (!res.ok) return
           const entry = await res.json()
+          if (stopped) return        // V5b：同上 —— 卸载后不再播报
           const tier = balanceCue(entry, lastTier)
           if (tier === null) return
           const clip = tierClip(tier)
@@ -1385,9 +1393,24 @@ window.__ModuleLoader__.load({
           }
         } catch (err) { /* 宿主不在时静默：桌宠不该刷屏 */ }
       }
-      setInterval(pollBalance, BALANCE_POLL_MS)
+      const balanceTimer = setInterval(pollBalance, BALANCE_POLL_MS)
       pollBalance()
       console.info('[dsh-kylin-pet] 舞台已就绪：' + config.cast.map((p) => p.id).join(' + '))
+
+      /* V5b：**把舞台完整交还出去**。apply 的 effect disposer 调它。
+         枚举口径对着 start() 里铺开的东西逐个来，不靠「删掉 root 应该就干净了」：
+           rAF 循环 · /state 轮询 · /balance 轮询 · 账本防抖写 · 每只宠的气泡淡出计时 · root 本身。 */
+      return function stop() {
+        stopped = true
+        if (rafId) { try { cancelAnimationFrame(rafId) } catch (err) { /* 已取消 */ } rafId = 0 }
+        clearInterval(stateTimer)
+        clearInterval(balanceTimer)
+        if (bondTimer !== null) { clearTimeout(bondTimer); bondTimer = null }
+        for (const a of world.actors) {
+          if (a.sayTimer) { clearTimeout(a.sayTimer); a.sayTimer = null }
+        }
+        try { root.remove() } catch (err) { /* 已被移除 */ }
+      }
     }
 
     // 契约在工厂体**末尾**冻结：函数声明在装载期就提升到位，所有 const 表（含 §3.9 的 SCRIPTS / ADVANCE / LINES）
@@ -1414,8 +1437,25 @@ window.__ModuleLoader__.load({
       directorState: () => (probe ? probe() : null),
     })
 
-    exports.apply = () => {
-      start().catch((err) => console.warn('[dsh-kylin-pet] 启动失败：', err))
+    /* V5b：**必须收 ctx 并注册 effect** —— 设置页关掉插件开关时，客户端模块系统会卸载本模块，
+       它「removes the entry and waits for its asynchronous effects before evicting unused modules and styles」
+       （dsh-client-modules/README.md:42「Live plugin composition」）。
+       这是**存在性证明**，不是推测：本机 `@deepseek-ai/dsh-client-ui-trajectory` 与
+       `dsh-client-ui-model-selection` 两个官方插件的 client 半边都收 ctx，且各注册 1 与 2 处 ctx.effect。
+       不注册的后果就是你看到的样子：**开关关掉、桌宠不消失** —— 模块与样式都被驱逐了，
+       而我们 append 到 body 上的 root 没人摘。 */
+    exports.apply = (ctx) => {
+      let teardown = null
+      let gone = false
+      start().then((fn) => {
+        teardown = fn
+        // 启动是异步的（要读配置与账本）：若在它跑完之前就被卸载，得补收一次，
+        // 否则「开关快速关了又开」会留下一个没有主的舞台。
+        if (gone && fn) fn()
+      }, (err) => console.warn('[dsh-kylin-pet] 启动失败：', err))
+      if (ctx && typeof ctx.effect === 'function') {
+        ctx.effect(() => () => { gone = true; if (teardown) teardown() }, 'dsh-kylin-pet stage @ ' + ROUTE_PREFIX)
+      }
     }
     return exports
   },

@@ -1,0 +1,19 @@
+BEFORE  {"stage":true,"actors":2,"disposers":1,"raf":52}
+MID     raf=119 statePoll=2 in 2.2s
+DISPOSE killed=1 -> {"stage":false,"disposers":0,"raf":120}
+AFTER   raf=120 statePoll=0 in 2.4s
+ERRORS  []
+GATES   {
+ "started": true,
+ "twoActors": true,
+ "effectRegistered": true,
+ "loopAliveBefore": true,
+ "pollAliveBefore": true,
+ "disposeRan": true,
+ "domRemoved": true,
+ "disposersCleared": true,
+ "rafLoopStopped": true,
+ "pollStopped": true,
+ "noConsoleOrPageErrors": true
+}
+RESULT  ALL PASS

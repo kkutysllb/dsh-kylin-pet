@@ -252,3 +252,76 @@ walk: ['走路', '状态张望', '状态忙碌']    ← 「状态忙碌」就是
 
 `test/director.test.mjs` 的 `mkActor` 补上 `box` / `setFacing` —— **`enterPhase` 每加一处世界依赖，就必须同步补进替身**（这条教训本片已经是第二次踩）。
 
+
+---
+
+# V5b —— 「设置页关掉插件开关，桌宠不消失」（用户报，Lead 亲诊亲修）
+
+## 现象与根因
+
+用户截图：设置 → 插件 关掉 `dsh-kylin-pet` 的开关，**桌宠留在屏幕上**。
+
+根因（源码级，非推测）：
+
+| | 官方插件 | 我们 |
+|---|---|---|
+| `client` 的 `apply` | `apply(ctx)` | **`apply()` 无参** |
+| 注册的 `ctx.effect` | trajectory 1 处 / model-selection 2 处 | **0 处** |
+
+`dsh-client-modules/README.md:42`（Live plugin composition）原文：
+
+> Enabling an ordinary plugin adds its Loader entry; **disabling it removes the entry and waits for its
+> asynchronous effects before evicting unused modules and styles.**
+
+即：禁用**真的会**卸载客户端模块、清掉它的样式，并执行它的 effect disposer。而我们
+
+- 没接 ctx ⇒ 没有 effect；
+- app 里 `document.body.appendChild(root)` 的那个 root **没有任何人摘**。
+
+⇒ 模块与样式被驱逐了，**舞台留在 body 上**。这就是用户看到的现象。
+
+## 修法
+
+`start()` 交出 `stop()`，`exports.apply(ctx)` 用 `ctx.effect` 注册它。`stop()` 的枚举**对着 start() 里铺开的东西逐个来**，不靠「删掉 root 应该就干净了」：
+
+| 资源 | 收法 |
+|---|---|
+| rAF 循环 | `stopped` 标志 + `cancelAnimationFrame(rafId)`（**两者都要**：卸载若发生在一帧执行中，帧尾那句 rAF 会挂上一条没人拿得到句柄的循环） |
+| `/state` 轮询 1s | `clearInterval` |
+| `/balance` 轮询 30s | `clearInterval` |
+| 账本防抖写计时器 | `clearTimeout` + 置 null |
+| 每只宠的气泡淡出计时器 | `clearTimeout` |
+| root 元素 | `root.remove()` |
+
+另补：两个轮询的 **async 续体**在卸载后直接 return —— 否则已在飞的 fetch 回来还会去动已拆的舞台。
+
+## 两层回归
+
+**单测**（进 `npm test`，`test/client-contract.test.mjs` `V5b·1`）：apply 收 ctx 并注册**恰好一处** effect；且 start() 还没跑完时调用 disposer **不许抛**（开关快速关了又开的路径）。
+负对照：把 `ctx.effect` 注册去掉 ⇒ `V5b·1` **红**，恢复后逐字节相同（`shasum` 核对）。
+
+**浏览器验收**（`npm run accept:v5b`，`tools/v5b-teardown.mjs`，11 门）：真 Chromium，用 `ctx.effect` 的替身拿到 disposer 并真的调它。
+
+| 门 | 读数 |
+|---|---|
+| `effectRegistered` | disposers = 1 |
+| `loopAliveBefore` | rAF 53 → 119 |
+| `pollAliveBefore` | 2.2s 内 /state 2 次 |
+| `domRemoved` | dispose 后 `#dsh-kylin-pet-stage` 不存在 |
+| **`rafLoopStopped`** | rAF **冻在 119**（循环真停了，不只是 DOM 没了） |
+| **`pollStopped`** | 之后 2.4s 内 /state **0 次** |
+| `noConsoleOrPageErrors` | [] |
+
+负对照：去掉 `ctx.effect` 注册 ⇒ **5 门红**（`effectRegistered/disposeRan/domRemoved/rafLoopStopped/pollStopped`），
+读数 `stage:true`、rAF 128→149、/state 还在轮询 —— **正是用户报的那个现象**。
+
+## 同类问题排查（Phase 4）
+
+全文件搜：`document.body.appendChild` **仅 1 处**（已收）；**零 `window.addEventListener` / `document.addEventListener`**；5 处计时器**全部**在 `stop()` 里。**无第二处同类缺口。**
+
+## 执行期我的两个失误（如实登记）
+
+1. **改坏了 `tools/harness.mjs` 而没发现**：注释跨行写进了 JS 字符串数组元素里，语法错；我的自检命令写成 `node --check ... 2>/dev/null; ... && echo 'shim 已改'` —— **把 stderr 丢了还照样打印成功**。是随后「验收台连不上」才暴露的。
+   ⇒ 规则：**检查命令不许吞输出**；`node --check` 的退出码要显式打印。
+2. **第一次负对照没打印锚点命中数** —— 「补丁没应用」和「应用了但没红」输出一样。已改成先打印 `ANCHOR HIT n/n` + 变更后哈希。
+

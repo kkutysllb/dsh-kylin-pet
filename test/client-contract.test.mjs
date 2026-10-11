@@ -56,3 +56,44 @@ test('工厂能接住 require 形参（漏了它整个条目会激活失败）',
   const src = readFileSync(new URL('../src/stage/client.js', import.meta.url), 'utf8')
   assert.match(src, /factory:\s*\(\s*require\s*\)/)
 })
+
+/** V5b：apply 的**注册面**单测。真正「舞台被收干净」由 tools/v5b-teardown.mjs 在真浏览器里验（11 门），
+ *  这里只守那个便宜且致命的不变式：**apply 必须收 ctx 并注册 effect**。
+ *  用户报的 bug 就是这条缺失 —— 关掉插件开关时客户端模块被卸载、样式被驱逐，
+ *  而我们挂在 body 上的舞台没人摘。 */
+function loadModuleExports() {
+  const src = readFileSync(new URL('../src/stage/client.js', import.meta.url), 'utf8')
+  let captured = null
+  const win = {
+    __ModuleLoader__: {
+      load: (mod) => { captured = mod.factory(() => { throw new Error('装载期不该 require') }) },
+    },
+  }
+  // 刻意**不给** document / fetch：apply 里的 start() 会因此失败，
+  // 而我们要断言的那件事（同步注册 effect）不依赖它 —— 这正是这条测试便宜的原因。
+  vm.runInNewContext(src, { window: win, console: { info: () => {}, warn: () => {} }, performance: performance })
+  assert.ok(captured, 'client.js 必须调用 __ModuleLoader__.load')
+  return captured
+}
+
+test('V5b·1 apply 收 ctx 并注册**恰好一处** effect —— 关插件开关时靠它交还舞台', () => {
+  const ex = loadModuleExports()
+  const labels = []
+  const disposers = []
+  const ctx = {
+    effect: (cb, label) => {
+      labels.push(label)
+      const d = cb()
+      if (typeof d === 'function') disposers.push(d)
+      return d
+    },
+  }
+  ex.apply(ctx)
+  assert.equal(labels.length, 1, '必须注册**恰好一处** effect（多一处会在卸载时重复收尾）')
+  assert.ok(String(labels[0]).indexOf('dsh-kylin-pet') >= 0, 'label 要能认出是我们：' + labels[0])
+  assert.equal(disposers.length, 1)
+  // 卸载必须**安全**：start() 是异步的，若在它跑完前就被卸载（开关快速关了又开），
+  // 也绝不能抛 —— 抛会让整个模块的驱逐失败。
+  assert.doesNotThrow(() => disposers[0]())
+})
+
