@@ -203,6 +203,9 @@ function chooseIntent(self, other, rng) {
     cands.push({ intent: c, family: 'social', gate: g, score: g ? -Infinity : socialScore(c, self, other, dist) })
   }
   const live = cands.filter((c) => c.gate === null)
+  // **死分支（执行期实测）**：solo 候选恒以 gate:null 入列，live 至少 4 个 ⇒ 这行**今天不可达**。
+  // 保留是纵深防御（将来若 solo 也加门控，这里就活得过来），但**测试项「全部社交被淘汰时回 idle」
+  // 测的其实是打分排序，不是这个分支** —— 别把它的绿当成这行的覆盖。
   if (live.length === 0) return { intent: 'idle', family: 'solo', gate: null, score: 0, all: cands }
   let best = live[0]
   for (const c of live) {
