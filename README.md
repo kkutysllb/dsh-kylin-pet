@@ -42,6 +42,22 @@ node tools/harness.mjs [端口] [账本路径]      # 默认 7391 / <dsh家目�
 
 > ⚠️ **后两条只存在于 harness，不存在于 `entry.js`，生产路径也没有。**
 
+## 开发期安装：必须用 `link:`，不要用 `file:`
+
+```bash
+dsh plugin --profile web add link:/path/to/this/repo      # ✅ 符号链接：改完刷新页面即可见
+dsh plugin --profile web add file:/path/to/this/repo      # ❌ 拷贝：改了代码**永远不会生效**
+```
+
+**这不是风格问题，是一次真实的抓瞎**：`file:` 把仓库**拷贝**进 `node_modules/`，
+于是之后所有提交都不在运行中的插件里。表现是「我明明修了，用户说还是老样子」——
+而两边看到的是**两份不同的代码**。2026-10-11 就这么白查了好几轮「屏幕闪烁」。
+
+> 判断当前装的是哪种：`readlink ~/.coder/profiles/web/node_modules/dsh-kylin-pet` ——
+> 打印路径 = 链接（会跟着改）；打印 `(真目录)` = 拷贝（**已经过时了**）。
+
+另注：**client 半边**改完刷新页面即可；**host 半边**（`src/server/**`）改动需要重启引擎。
+
 ## 关系重置
 
 **两条路，任选一条**：

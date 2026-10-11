@@ -382,6 +382,7 @@ window.__ModuleLoader__.load({
       const a = {
         pet: pet, el: el, hit: hit, box: { w: w, h: h },
         x: 0, y: 0,                 // 脚点（px）
+        lx: NaN, ly: NaN,           // 上一次写进 transform 的值（NaN ⇒ 首帧必写）
         facing: 1,
         clip: null,
         clipName: null,             // 当前实际素材名（余额档位要播指定那一段，不能随机）
@@ -460,9 +461,20 @@ window.__ModuleLoader__.load({
         })
       }
 
+      /**
+       * 把脚点写进 transform。
+       *
+       * ⚠️ **只在真的动了才写**。原来是每帧无条件写一次 —— 而 `layout()` 被 `step()` 每帧
+       * 对每只宠调用，两只就是 **120 次/秒的样式写入 + 合成层失效**。桌宠大部分时间静止，
+       * 这些写入全是噪声；在每 token 都重渲染的宿主页面里，它表现为可见的抖动/闪烁。
+       * 位移本身由世界推进，位置没变就没有任何理由碰 style。
+       */
       a.layout = () => {
         const left = a.x - w / 2
         const top = a.y - h * ASSET.FOOT_RATIO
+        if (left === a.lx && top === a.ly) return
+        a.lx = left
+        a.ly = top
         el.style.transform = 'translate3d(' + left + 'px,' + top + 'px,0)'
       }
       a.destroy = () => el.remove()
