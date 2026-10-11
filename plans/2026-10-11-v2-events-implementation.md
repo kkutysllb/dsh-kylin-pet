@@ -463,6 +463,10 @@ git commit -m 'feat(stage): 诱因消费（分流 / 气泡 / 轮询）'
 
 按 V1 的方式（`createRequire('/opt/homebrew/lib/node_modules/')`，端口另取避开占用）：
 
+> **执行期补充（Lead 备脚本时发现）：气泡没有稳定选择器。** 计划只描述了气泡的视觉行为（`opacity` 过渡），没给它 `id` 或 `data-*`。于是取证**不能** `querySelector('.bubble')`，只能按**行为特征**找：演员元素内、`textContent` 非空、且 `getComputedStyle(kid).opacity > 0.5` 的那个 `div`。
+> 这个启发式是可靠的（气泡是演员元素内**唯一**带文本的子节点，且隐藏只改 `opacity`、不清 `textContent`），但它是**启发式**，所以在这里写明来源。
+> **对断言口径的影响（重要）**：待机链会自然换片，所以「另一只不动」**不能**用「前台片没变」来判——那只宠可能正好在散步。改用**气泡为空**：气泡**只**由 `react()` 产生，因此「该冒的冒了 + 不该冒的没冒」是一对确定可判定的断言。前台片只作**辅助观察**（`failXishaClipIsSad` / `okKylinziClipIsHappy`），不作硬门。
+
 1. 打开页面、等 3s、截图 `01-idle.png`；
 2. **注入失败**：`POST /__emit?name=agent%2Ferror` → 等 1.2s → 断言
    - `xisha`（fail 档）前台片 ∈ `CLIPS.sad`，气泡文本 === `让我想想`；
