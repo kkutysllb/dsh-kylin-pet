@@ -1027,6 +1027,63 @@ Run: `npm test` → Expected: **146 pass / 0 fail**（140 + 6）。**负对照**
 
 ---
 
+## Task 5c: 三处一行级修正（Task 5 执行期发现）
+
+**Files:** Modify `src/stage/client.js`、`test/client-v3b.test.mjs`
+
+### 裁决记录（回 Task 5 子代理的六条发现）
+
+| # | 发现 | 裁决 |
+|---|---|---|
+| **A** | `bondFor` **全仓不存在**（照抄计划必 `ReferenceError`，舞台整个起不来） | **接受它的最小实现**，但**语义要补**（见 Step 1） |
+| **B** | `deliverStimulus` 定义位置 / 跨 realm 可测 / 「不加契约键」三者互斥 | **接受新增唯一契约键 `deliverStimulus`**。理由：它把三闭包变量改成显式形参，是**比我计划更干净的解法**（纯函数、无作用域耦合）；而另一种选择（删掉那条单测）会**丢掉 V3b 核心语义的最强守卫** |
+| **C** | 计划写 `clamp(..., 0.05, 0.95)`，而 V3 已落地的 `curiosityOf` 是 `clamp(..., 0.25, 0.9)` | **接受实测值**。V3 已按 0.25/0.9 验收过；为迁就一句计划的数字去重开 V3 不成比例。计划原文**标注为过时** |
+| **D** | `world.pairKey = pairKey` 在 `createDirector` **之后** ⇒ 导演的 `pairKey` 是 `undefined`，靠 `queueBondEvent` 的回退兜住 | **修**（Step 2）。生产能跑是**被兜底救了**，而「靠兜底活着」正是本仓反复出问题的地方 |
+| **E** | `deliverStimulus` 比 V2 的 `react` 少了 `if (!stimulus \|\| KINDS.indexOf(...) < 0) return []` | **修**（Step 3）。缺守卫 ⇒ `deliverStimulus(null)` 抛 ⇒ 被 poll 的 try/catch 吞 ⇒ **`since` 不推进 ⇒ 整批诱因每 1s 反复重投** |
+| **F** | Task 5 的 Files 行误列 `test/client-contract.test.mjs` | 无需动（实测成立）。计划那行**标注为多余** |
+
+### Step 1: `m.bond` 必须每拍刷新（**否则解锁永远不生效**）
+
+Task 5 的 `bondFor` 是**启动时的一次性快照**，之后再也不更新。而 `unlocked`/`socialGate` 读的正是 `m.bond` ⇒ **`TUNING.UNLOCK` 里的条件（如 `shoulder` 要 affinity ≥ 20）在整个会话里永远不会生效**，只有下次刷页面才解锁。
+
+修法：把它并进 Task 5 已经在做的那条逐拍同步（`world.step` 之后、`director.step` 之前）：
+
+```js
+for (const a of world.actors) {
+  const m = minds[a.pet.id]
+  if (!m) continue
+  m.x = a.x; m.y = a.y
+  // 关系也会在会话里变（bump / settle），不刷新的话 UNLOCK 永远停在启动那一刻的值
+  m.bond = { affinity: bondState.affinity, familiarity: bondState.familiarity }
+}
+```
+
+### Step 2: `world.pairKey` 提到建导演之前
+
+把 `world.pairKey = pairKey` 挪到 `const director = createDirector({...})` **之前**，并删掉那条解释「靠回退补正」的注释。
+
+并补一条测试：**导演的 settle 事件里 `pair` 必须等于 `pairId(cast[0], cast[1])`**，不是 `undefined`（修正前这条必红）。
+
+### Step 3: 恢复 `deliverStimulus` 的入参守卫
+
+函数第一行补回 V2 `react` 的守卫（逐字）：
+
+```js
+if (!stimulus || KINDS.indexOf(stimulus.kind) < 0) return []
+```
+
+并补一条测试：`deliverStimulus(minds, actors, null, config)` **不抛**且返回 `[]`。
+
+### Step 4: 测试与 Run
+
+1. **解锁随会话生效**：启动 `affinity = 0` ⇒ `shoulder` 被 `locked` 淘汰；把 `bondState.affinity` 改成 30 并跑一拍同步 ⇒ **同一会话内** `shoulder` 变成可用（修正前这条必红）；
+2. **`pair` 不再是 undefined**（Step 2）；
+3. **`deliverStimulus(null)` 不抛**（Step 3）。
+
+Run: `npm test` → Expected: **149 pass / 0 fail**（146 + 3；含 Task 5b 的 6 条）。**负对照**：把 Step 1 的刷新那行删掉 ⇒ 测试 1 必须红。
+
+---
+
 ## Task 6: 真浏览器取证（V3b 的唯一验收）
 
 **Files:** Modify `src/stage/client.js`（只加一个只读探针）、`tools/harness.mjs`（可选）；产出 `evidence/v3b/*.png`；计划追加「V3b 取证记录」
