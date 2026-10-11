@@ -10,7 +10,10 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 
 const NL = String.fromCharCode(10)
-const SOURCE_GLOBS = ['src', 'tools', 'scripts']
+// docs 也必须在扫描面内：**文案**是 clean-room 最要害的东西，
+// 而 `docs/character-bible.md` 正是文案的唯一解释权所在 —— 不扫它，
+// 等于把最该被检查的那份文件放在门外（2026-10-11 加设定集时发现的缺口）。
+const SOURCE_GLOBS = ['src', 'tools', 'scripts', 'docs']
 /**
  * 门禁自身必须排除（自指）：它的 DENY 表与注释里必然逐字出现这些特征串，
  * 不排除则门永远红。这不是放水 —— 别的文件出现同样的字面量照样被抓。
