@@ -1084,6 +1084,79 @@ Run: `npm test` → Expected: **149 pass / 0 fail**（146 + 3；含 Task 5b 的 
 
 ---
 
+## Task 5d: **两个常量互相矛盾 ⇒ 阶段永远不推进**（Task 6 取证发现）
+
+**Files:** Modify `src/stage/client.js`、`test/client-v3b.test.mjs`
+
+### 现场（Task 6 首次真机取证的原始输出）
+
+```
+duetAtBreak:  { kind: "shoulder", phase: "approach", at: 9.66 }
+memoriesRaw:  [{ kind: "shoulder", at: 3.59, aborted: "timeout" }]
+phasesSeen:   ["approach"]
+deltaAffinity: 0
+```
+
+一次 `shoulder` 在 `approach` 里坐了 **6 秒**（= `PHASE_TIMEOUT_SEC.approach`）撞超时被 abort；而 `abort` **不上冷却** ⇒ 下一拍立刻重开同一场 ⇒ **无限循环**，账本一次也没写成。
+
+### 根因：门槛比世界允许的最近距离还小
+
+```
+separate() 每帧强制 |dx| >= (x.box.w + y.box.w) * 0.28 = (280 + 280) * 0.28 = 156.8
+ADVANCE.near     = dist <= TUNING.NEAR_RADIUS = 150          ← 比 156.8 小 ⇒ 永不成立
+ADVANCE.veryNear = TUNING.NEAR_RADIUS * 0.6 = 90             ← 更小 ⇒ 永不成立
+```
+
+**世界不允许两只靠到 150 以内，而 `near` 要求 ≤ 150** ⇒ 这条谓词是一个**恒假式**。`approach` 是每个剧本的第一阶段，于是**没有任何剧本能走过第一阶段** —— V3b 的表现层从未真正运行过。
+
+> 两个常量分属两个子系统：`NEAR_RADIUS` 在 `TUNING`（导演侧），`156.8` 由 `separate()` 的公式推出（世界侧）。**单看任何一边都是合理的**，只有把它们放在一起才矛盾 —— 所以它是「只有真机取证才能发现」的那一类。
+
+### Step 1: 抬高门槛，让它**大于世界的分离下限**
+
+```js
+NEAR_RADIUS: 300,             // px：算「已经在旁边」。
+                              // **必须大于 separate() 强制的最小间距**（两只 280 宽的宠 → 156.8），
+                              // 否则 near / veryNear 都是恒假式，approach 阶段永远不会结束。
+```
+
+选 300 是因为 `veryNear = NEAR_RADIUS * 0.6 = 180` 也要大于 156.8，同时两者都要小于 `SOCIAL_RADIUS = 360`。
+
+### Step 2: `enterPhase` 的 `move:'toward'` 不要自己算间距
+
+原文 `const gap = ASSET.W * 0.28` = **179.2** —— 用的是**素材原生宽 640**，而 `separate()` 用的是**演员渲染宽 280**。两个「0.28 的宽」不是同一个宽，于是「走过去」的终点（179.2）与世界的下限（156.8）只差 22px，而 `veryNear` 改动后是 180 —— **又一次贴边**。
+
+改成直接以对方为目标，**让世界自己的分离规则决定最终距离**：
+
+```js
+if (spec.move === 'toward' && actorA && actorB) {
+  actorA.target = { x: actorB.x, y: actorB.y }   // 能走多近由 separate() 决定（它是唯一裁决点）
+}
+```
+
+### Step 3: 一条**数值不变式**测试（这才是本 Task 真正的产出）
+
+```js
+test('数值不变式：near / veryNear 的门槛必须大于世界强制的最小间距', () => {
+  const boxW = 280                                   // 演员渲染宽（pet.size 默认值）
+  const minGap = (boxW + boxW) * 0.28                // separate() 的公式
+  assert.ok(C.TUNING.NEAR_RADIUS > minGap,
+    'NEAR_RADIUS(' + C.TUNING.NEAR_RADIUS + ') 必须 > minGap(' + minGap + ')，否则 near 恒假')
+  assert.ok(C.TUNING.NEAR_RADIUS * 0.6 > minGap,
+    'veryNear(' + C.TUNING.NEAR_RADIUS * 0.6 + ') 必须 > minGap(' + minGap + ')，否则 veryNear 恒假')
+  assert.ok(C.TUNING.NEAR_RADIUS < C.TUNING.SOCIAL_RADIUS, 'near 必须比 too-far 更近')
+})
+```
+
+> **这条测试的价值不在覆盖，而在把两段公式钉在一起。** 将来任何人调 `NEAR_RADIUS`、改 `separate()` 的系数、或改 `pet.size`，它都会立刻红。
+
+### Step 4: Run
+
+Run: `npm test` → Expected: **150 pass / 0 fail**（149 + 1）。**负对照**：把 `NEAR_RADIUS` 改回 150 ⇒ 那条数值不变式**必须红**。
+
+然后**重跑 Task 6 取证** —— 这次 `phasesSeen` 应当包含四个阶段，`deltaAffinity` 应当等于剧本表里的值。
+
+---
+
 ## Task 6: 真浏览器取证（V3b 的唯一验收）
 
 **Files:** Modify `src/stage/client.js`（只加一个只读探针）、`tools/harness.mjs`（可选）；产出 `evidence/v3b/*.png`；计划追加「V3b 取证记录」
