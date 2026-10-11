@@ -619,6 +619,75 @@ if (mate && !mate.held && Math.random() < p) { … }
 
 Run: `npm test` → Expected: **124 pass / 0 fail**（114 + 10）。
 
+---
+
+## Task 6: 真浏览器取证（V3b 的唯一验收）
+
+**Files:** Modify `src/stage/client.js`（只加一个只读探针）、`tools/harness.mjs`（可选）；产出 `evidence/v3b/*.png`；计划追加「V3b 取证记录」
+
+### Step 1: 加一个只读探针（**唯一的取证用开口**）
+
+没有它，「导演真的跑了一场合演」就只能靠截图猜。挂在 `__kylinContract.directorState()`：
+
+```js
+/** 只读快照，给取证脚本用。不暴露任何可变引用。 */
+directorState: () => ({
+  duet: director.duet ? { kind: director.duet.kind, phase: director.duet.phase, at: director.duet.at } : null,
+  memories: director.memories.slice(-20),
+  moods: Object.fromEntries(Object.keys(minds).map((id) => [id, { mood: minds[id].mood, energy: minds[id].energy, cooldown: Object.keys(minds[id].cooldown) }])),
+}),
+```
+
+### Step 2: 取证脚本（Playwright，Lead 亲跑；**沿用轮询等待，不用固定 sleep**）
+
+1. **观察到一次完整四阶段**：打开页面后轮询 `directorState()`，**记录 `duet.phase` 出现过的取值集合**；等到 `memories` 从 0 变 1（一场合演收尾）→ 断言阶段集合 ⊇ `{approach, open, exchange, settle}`（**不能只有 open/settle**——那说明阶段推进是假的）→ 截图 `01-interaction.png`；
+2. **账本随互动增长**：同一时刻 `GET /bond` 的 `affinity` **与合演前不同**，且变化量 === `TUNING.EFFECT[该 kind]`（**用剧本表核对，不是「变了就行」**）；
+3. **冷却期内不重复**：继续轮询，在 `COOLDOWN_SEC[kind]` 窗口内断言 `memories` 里**同 kind 不出现第二次**（若出现，把两条的 `at` 差与冷却值一起打出来）；
+4. **被拎起退出社交**：`page.mouse.down()` 压在麒麟仔命中区**不松手**，轮询 `directorState()` → 断言此后**没有新的 `duet` 开启**；若当时正好有一场，断言 `memories` 里出现 `aborted: 'partner-held'`；
+5. **诱因不再直接点播（V3b 与 V2 的可观测分界）**：注入一次 `agent/error`，**同步**读 `directorState()` → 断言 `moods.xisha.mood` **立刻**下降，但**没有任何 actor 的当前档位被同步改成 `sad`**；截图 `02-stimulus-to-mind.png`；
+6. 零 console/page 错误。
+
+### Step 3: 写回计划并提交
+
+```bash
+git add src/stage/client.js evidence/v3b plans/2026-10-11-v3b-social-implementation.md
+git commit -m 'test(v3b): 真浏览器取证（合演四阶段 / 账本随互动增长 / 冷却硬约束 / 拎起退出）'
+```
+
+---
+
+## 自审
+
+**Spec 覆盖**
+
+| spec | 落在 |
+|---|---|
+| §5 心智状态与打分（门控优先、再加权） | Task 2 |
+| §5 权重表只在一处调参 | Task 1 的 `TUNING`（`WEIGHT`） |
+| §6 动作槽（1 合演 + 每宠 1 独演） | Task 3 `open` 的 `if (duet) return null` |
+| §6 仲裁 `优先级 = |affinity| × 意图强度 × 新鲜度` | Task 3 `priority`（**新鲜度靠导演时钟，不读心智状态** —— 执行前的自审修过一次） |
+| §6 败者退回独处链、不报错不排队 | Task 3 `step` 里的 `continue` |
+| §6 四阶段 + 超时/拎走即 abort + 写记忆 | Task 3 的 `abort`（两条路都清 `busy`） |
+| §6 收尾唯一入口写账本 | Task 3 `settle` → `stick` → V3 的 `queueBondEvent` |
+| §7 8 个剧本的编排/效果/解锁 | Task 4（表）+ Task 1（`TUNING.UNLOCK`/`EFFECT`） |
+| §7 台词全原创、与逻辑解耦 | Task 4 的 `LINES` |
+| §8 诱因 → 心智消化（不直接点播） | Task 5 Step 3 + Task 6 Step 2.5 |
+| §11.3 真浏览器取证 | Task 6 |
+| §12 R1 表现力天花板 = 6 段美术 | Task 4 的测试 2（遍历全剧本断言 clip ∈ `CLIPS`） |
+| §12 R7 空闲链不同拍 | Task 2 的 `jitter`（写在比较里，不污染返回值）+ V1 的 `fnv` 种子 |
+
+**占位符扫描**：无 TODO / 后续补 / 类似前面。
+
+**已知取舍（写在这里，不留给实施期发现）**：
+1. **`shoulder` 无台词** —— 靠时长与移动区分，不靠一句几乎相同的话（Task 4 已注明）。
+2. **`gift` 的两个 effect 是 Outcome 分支，不是两个剧本**（表现相同、账本不同）。
+3. **V2 的 `react()` 被改名并改语义**（`deliverStimulus`）—— 这是**破坏性**的：V2 的浏览器取证记录里「注入后立刻换档」这句话在 V3b 之后**不再成立**。两处记录都要留，且 V2 那节的结论要标注「其时点为 V2 收口，V3b 已改为心智消化」。
+4. **本片不动 host**：`/state`、`/bond`、`/balance` 三条路由的语义一个字不改。
+5. **导演的记忆上限 50 是手调的**，没有配置项（YAGNI，与 V2 的轮询周期同一处置）。
+
+**执行交接**：与 V2/V3 同款 —— 每 Task 一个干净上下文的子代理，Lead 在验收点核对证据；**Task 6 由 Lead 亲跑**。
+
+
 
 
 
