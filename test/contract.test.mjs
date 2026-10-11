@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, BOND, LEDGER_REASONS, BALANCE_TIERS, INTENTS, TUNING } from '../src/shared/contract.js'
+import { ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, TOOL_CLASS, classifyTool, BOND, LEDGER_REASONS, BALANCE_TIERS, INTENTS, TUNING } from '../src/shared/contract.js'
 
 test('路由前缀是注册进 host 的那一个', () => {
   assert.equal(ROUTE_PREFIX, '/dsh-kylin-pet-7341')
@@ -25,8 +25,12 @@ test('契约是冻结的（防运行期被改）', () => {
   assert.throws(() => { ASSET.W = 1 }, TypeError)
   assert.throws(() => { CLIPS.idle = [] }, TypeError)
   assert.ok(LOOPING.length === 2 && LOOPING.includes('idle') && LOOPING.includes('walk'))
-  assert.equal(KINDS.length, 3)
+  assert.equal(KINDS.length, 5)
   assert.ok(Object.isFrozen(KINDS))
+  // V5：分类表与它内部的每个数组都必须冻结 —— 它被 host 与 client 同时读，
+  // 运行期被谁改一格，两边就会对同一个工具说出不同的话，而且不会有任何测试红。
+  assert.ok(Object.isFrozen(TOOL_CLASS))
+  for (const cls of Object.keys(TOOL_CLASS)) assert.ok(Object.isFrozen(TOOL_CLASS[cls]), cls + ' 应当冻结')
   assert.ok(BOND.AFFINITY_MIN === -100 && BOND.AFFINITY_MAX === 100)
   assert.ok(LEDGER_REASONS.length === 7 && Object.isFrozen(LEDGER_REASONS))
   assert.equal(BALANCE_TIERS[0][0], '充裕')

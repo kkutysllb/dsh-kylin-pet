@@ -94,6 +94,20 @@ test('设定集 5.1 ↔ 代码诱因文案表：双向一致', () => {
   for (const [k, v] of inBible) assert.equal(inCode.get(k), v, '设定集有而代码没有/不一致：' + k)
 })
 
+test('设定集 5.3 ↔ 执行期按类别的台词表：双向一致', () => {
+  const body = literal(CLIENT, 'LINES_WORKING')
+  assert.ok(body, '代码里找不到 LINES_WORKING')
+  const inCode = flatPairs(body)
+  const inBible = new Map()
+  for (const cells of rows(section('### 5.3'))) {
+    const k = keyOf(cells[0])
+    if (k) inBible.set(k, cells[1])
+  }
+  assert.ok(inCode.size > 0, 'LINES_WORKING 解析为空')
+  for (const [k, v] of inCode) assert.equal(inBible.get(k), v, '代码有而设定集没有/不一致：' + k)
+  for (const [k, v] of inBible) assert.equal(inCode.get(k), v, '设定集有而代码没有/不一致：' + k)
+})
+
 test('设定集 5.2 ↔ 代码剧本文案表：双向一致（V3b 未落地时跳过并说明理由）', (t) => {
   if (!scriptBody) {
     t.diagnostic('SKIP：代码里还没有剧本文案表（V3b Task 4 未落地）—— 这不是通过，是「尚无可对账之物」。')

@@ -28,7 +28,11 @@ window.__ModuleLoader__.load({
       happy: ['点击开心', '开心跳跃', '庆祝成功', '余额健康', '余额充裕', '余额正常'],
     })
     const LOOPING = Object.freeze(['idle', 'walk'])
-    const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting'])
+    const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting', 'working', 'working-done'])
+    // 镜像 `contract.BUSY_CLIP`。**它必须在 SHARED_KEYS 里** —— 我第一次改 client 时
+    // 在 idleChain 里用了它却忘了镜像，测试全绿（因为没有一条测试走过忙碌分支），
+    // 一进真实任务就是 ReferenceError。手工核对不是门，键表才是。
+    const BUSY_CLIP = '状态忙碌'
     /** 账本边界（spec §4.5）。夹取与环形上限都从这里取，别在实现里写魔数。 */
     const BOND = Object.freeze({
       AFFINITY_MIN: -100,
@@ -92,7 +96,20 @@ window.__ModuleLoader__.load({
     const BOND_FLUSH_MS = 2000      // §4.5：客户端防抖 2s；host 是唯一写者，这里只排队
     const BALANCE_POLL_MS = 30000   // 余额变化慢、还要打外部网络：与 1s 的 /state 分开，频率低一点更礼貌
     /** 诱因气泡文案（原创）。**STIMULUS 后缀由 V3b Task 4 加的**：LINES 这个名字让给了 §3.9 的剧本台词表。 */
-    const LINES_STIMULUS = Object.freeze({ 'turn-ok': '稳了', 'turn-fail': '让我想想', waiting: '在呢' })
+    const LINES_STIMULUS = Object.freeze({
+      'turn-ok': '稳了', 'turn-fail': '让我想想', waiting: '在呢',
+      'working-done': '干完了',
+    })
+    /**
+     * 执行期主讲**按工具类别**说话（用户定的口径：只说类别，不说工具名与内容）。
+     * 未收录的类别一律 `other`（「在忙着」）—— 与 `classifyTool` 的落点一致，不猜。
+     */
+    const LINES_WORKING = Object.freeze({
+      read: '在翻文件', write: '在改代码', exec: '在跑命令',
+      web: '在查资料', agent: '在派活', other: '在忙着',
+    })
+    /** 收工时**另一只**的应和。只在收工这一下，不在「在忙」期间 —— 那会变成两条气泡互相刷。 */
+    const ECHO_DONE = '嗯'
     const ANIM_EXT = '.webm'
     const STAGE_ID = 'dsh-kylin-pet-stage'
     const DROP_DISTANCE = 120   // spec §8：拖到一起放下即触发一次近距离互动
@@ -129,8 +146,15 @@ window.__ModuleLoader__.load({
     function qualified(kind, config) {
       const cast = (config && config.cast) || []
       if (kind === 'waiting') return cast.map((p) => p.id)
-      const want = STATUS_OF[kind]
       const map = (config && config.directing && config.directing.workStatus) || {}
+      // V5 执行期：主讲 = 工作状态挂在「成功/进展」那条线上的那只（人设上就是更主动的那只）。
+      // **复用 workStatus 而不新加配置键** —— 它表达的本就是「这只负责进展这条线」；
+      // 新加一个键意味着用户还要再配一次，而配错的表现是「两只都不说话」。
+      if (kind === 'working' || kind === 'working-done') {
+        const ok = cast.filter((p) => (map[p.id] || []).indexOf('ok') >= 0).map((p) => p.id)
+        return ok.length ? ok : cast.map((p) => p.id)   // 没分工（单宠/未配置）就都算主讲
+      }
+      const want = STATUS_OF[kind]
       return cast.filter((p) => (map[p.id] || []).indexOf(want) >= 0).map((p) => p.id)
     }
 
@@ -432,6 +456,10 @@ window.__ModuleLoader__.load({
         mood: 0,            // [-1, 1]
         energy: 1,          // [0, 1]
         attention: 'free',  // free | drawn | focused
+        // V5：任务执行期标记。**刻意放心里智而不是 actor** —— actor 上的 `busy` 已经被
+        // 合演系统占用了（`separate()` / `freePartner` / `socialGate` 都在读它），
+        // 复用它会让「任务在忙」把两只宠的合演资格也锁掉。
+        working: false,
         // 默认中性关系（V3b Task 5 硬要求）：unlocked/socialGate 直接读 bond.familiarity / bond.affinity，
         // 补上它「心智永远有 bond」才是类型级的不变式 —— 先建心智、后读账本（读失败）时也只走 0/0。
         bond: { affinity: 0, familiarity: 0 },
@@ -473,6 +501,11 @@ window.__ModuleLoader__.load({
       if (!other) return 'no-partner'
       if (other.held) return 'partner-held'
       if (other.busy) return 'partner-busy'          // 正在合演
+      // V5：任务执行期间**不开新合演**。理由是实测出来的 —— 取证发现两只在采样窗口里
+      // 有 16/18 拍在演剧本，「在忙」的档位被挤到几乎不可见 ⇒ 用户要的「动作反应」看不见。
+      // 让正在进行的合演自然演完，但不新开：工作期间它们该看起来在干活。
+      if (self.working) return 'working'
+      if (other.working) return 'partner-working'
       if (dist > TUNING.SOCIAL_RADIUS) return candidate === 'approach' ? null : 'too-far'
       if (candidate === 'comfort' && !(other.mood < -0.3)) return 'no-need'   // spec §7：对方 mood < -0.3
       if (candidate === 'reconcile' && !(self.bond.affinity < 0)) return 'locked'
@@ -545,6 +578,21 @@ window.__ModuleLoader__.load({
       // ⇒ since 不推进 ⇒ **整批诱因每 1s 反复重投**。
       if (!stimulus || KINDS.indexOf(stimulus.kind) < 0) return []
       const ids = qualified(stimulus.kind, config)
+      // V5：忙碌标记是**全员**的（两只都在同一台机器上干活），气泡只由主讲出。
+      // 分开处理是因为 `qualified()` 回答的是「谁该开口」，不是「谁该进入忙碌态」——
+      // 把两者混在一个循环里，就会出现「没开口的那只看起来在闲逛」的观感。
+      if (stimulus.kind === 'working' || stimulus.kind === 'working-done') {
+        const busy = stimulus.kind === 'working'
+        for (const p of (config && config.cast) || []) {
+          const mm = minds[p.id]
+          if (mm) mm.working = busy
+        }
+        if (busy) {
+          // 「听到有活就停下手里的散步」—— 不清掉 target 的话，正在走向某处的宠会带着
+          // 走路档走完那几秒，忙碌档要等它到站才出现（实测里那 2 拍空闲就是这么来的）。
+          for (const a of actors) { if (!a.held) a.target = null }
+        }
+      }
       const touched = []
       for (const id of ids) {
         const m = minds[id]
@@ -553,9 +601,39 @@ window.__ModuleLoader__.load({
         if (stimulus.kind === 'turn-ok') { m.mood = clamp(m.mood + 0.35, -1, 1); m.energy = clamp(m.energy + 0.1, 0, 1) }
         if (stimulus.kind === 'turn-fail') { m.mood = clamp(m.mood - 0.45, -1, 1) }
         if (stimulus.kind === 'waiting') { m.attention = 'drawn'; a.say(LINES_STIMULUS.waiting) }
+        if (stimulus.kind === 'working') a.say(LINES_WORKING[stimulus.detail] || LINES_WORKING.other)
+        if (stimulus.kind === 'working-done') {
+          a.say(LINES_STIMULUS['working-done'])
+          // 收工这一下让**另一只**应一声。刻意只在收工：在忙期间每次换类都应和，
+          // 会变成两条气泡互相刷，而这一面本来就是高频的。
+          const other = actors.find((x) => x.pet.id !== id && !x.held)
+          if (other) other.say(ECHO_DONE)
+        }
         touched.push(id)
       }
       return touched
+    }
+
+    /**
+     * 任务执行期，这只宠该不该播「状态忙碌」？返回要播的**那一段**素材名，或 null。
+     *
+     * **纯函数、无 DOM**，刻意放工厂作用域 —— 原因与本文件其他地方同款：
+     * 装进 `idleChain` 内部的判断没有 DOM 就够不到，而「忙的时候到底播不播、播哪段」
+     * 正是最该被单测钉住的判断。
+     *
+     * 三个否定条件各有理由：
+     * - `held`：被用户拎在手上时该播「被拎起」，不该显示在忙；
+     * - `busy`：**正在合演** —— 合演的档位由导演点播，这里接管会把合演中途盖成「忙碌」，
+     *   看起来像宠演到一半突然去干活了；
+     * - `!mind.working`：没有任务在跑。
+     * 注意**不检查 `target`**（正在走向某处）：走上几秒再切忙碌比半路急停自然，
+     * 而气泡是立刻出的，用户不会觉得没反应。
+     */
+    function busyClipOf(mind, actor) {
+      if (!mind || !actor) return null
+      if (actor.held || actor.busy) return null
+      if (!mind.working) return null
+      return BUSY_CLIP
     }
 
     /* ==================== §3.7 导演 Director 与互动 Interaction ==================== */
@@ -797,7 +875,13 @@ window.__ModuleLoader__.load({
           const other = freePartner(a)
           const pick = chooseIntent(m, other ? minds[other.pet.id] : null, rng)
           events.push({ type: 'intent', pet: a.pet.id, intent: pick.intent, family: pick.family })
-          if (pick.family !== 'social' || !other) { a.play(pick.intent === 'walk' ? 'walk' : pick.intent === 'nap' ? 'idle' : 'idle'); continue }
+          if (pick.family !== 'social' || !other) {
+            // V5：**任务执行期导演不排独处动作**。这一行原本每帧都 play，会在 world.step
+            // 播完「状态忙碌」之后把它盖掉 —— 实测里忙碌档被覆盖了 186 次而画面纹丝不动，
+            // 因为覆盖者就是这里。帧序是 world.step → director.step，**导演是最后写者**。
+            if (!m.working) a.play(pick.intent === 'walk' ? 'walk' : pick.intent === 'nap' ? 'idle' : 'idle')
+            continue
+          }
           // 意图名 ≠ 剧本名。approach 是「走过去」这个前导动作，SCRIPTS 里没有它。
           // 没有剧本就**不开合演** —— 否则会 open 一个不存在的剧本，下一拍 abort('no-phase')，
           // 而 abort 不上冷却 ⇒ 每两拍空转一次（执行期实测）。
@@ -991,8 +1075,16 @@ window.__ModuleLoader__.load({
       }
 
       /** V1 的独处链：待机 / 散步 / 转身（V3 起由心智 Mind 接管）。 */
-      function idleChain(a, dt) {
+      function idleChain(a, dt, isWorking) {
         if (a.held || a.target) return
+        // V5：任务执行期间播「状态忙碌」（walk 档里的**循环**素材，用 exact 播指定那一段，
+        // 不能随机 —— 随机会跳去「走路」）。
+        // `!a.busy` 是关键：`a.busy` 是**合演中**标记，合演期间必须由导演点播，
+        // 否则这条会把合演的档位盖掉，看起来像「宠在合演中途突然开始忙」。
+        if (!a.busy && typeof isWorking === 'function' && isWorking(a)) {
+          a.play('walk', BUSY_CLIP)
+          return
+        }
         a.next -= dt
         if (a.next > 0) return
         const r = a.rng()
@@ -1009,7 +1101,7 @@ window.__ModuleLoader__.load({
         }
       }
 
-      function step(dt) {
+      function step(dt, isWorking) {
         const w = W()
         const h = H()
         for (const a of actors) {
@@ -1028,7 +1120,7 @@ window.__ModuleLoader__.load({
               if (Math.abs(dx) > 1) a.setFacing(dx < 0 ? -1 : 1)
             }
           }
-          idleChain(a, dt)
+          idleChain(a, dt, isWorking)
         }
         separate()
         for (const a of actors) {
@@ -1061,8 +1153,10 @@ window.__ModuleLoader__.load({
         queueBondEvent({ kind: 'bump', affinityDelta: 2, familiarityDelta: 1 })
       }
 
-      /** 诱因 -> 播哪档（waiting 双方探头，只播 idle）。 */
-      const CLIP_OF = { 'turn-ok': 'happy', 'turn-fail': 'sad', waiting: 'idle' }
+      // ⚠️ 这里原本有一个 `CLIP_OF = { 'turn-ok': 'happy', ... }`，**从未被读过**。
+      // 它是 V3b Task 5 Step 3 删掉旧 react() 时留下的残骸 —— 名字看起来像活的，
+      // 但全文件只有这一处定义。2026-10-11 V5 清掉：**看起来还活着的死代码**
+      // 比明显的死代码更贵，因为下一个人会照着它改。
 
       // V3b Task 5 Step 3：旧的 react() 已删除 —— 诱因改由 §3.6 的 deliverStimulus 施加到心智，
       // 点播交给导演。世界不再暴露 react（deliverStimulus 不属于世界）。
@@ -1188,11 +1282,22 @@ window.__ModuleLoader__.load({
         onStimulus: queueBondEvent,       // ← V3 的防抖写入口；导演**不自己发请求**
       })
       /* Task 6 取证探针：只读快照，不暴露任何可变引用（memories 在 director 的 getter 里已拷一份）。 */
+      const actorOf = (id, key) => {
+        const a = world.actors.find((x) => x.pet.id === id)
+        return a ? a[key] : undefined
+      }
       probe = () => ({
         duet: director.duet ? { kind: director.duet.kind, phase: director.duet.phase, at: director.duet.at } : null,
         memories: director.memories.slice(-20),
         moods: Object.fromEntries(Object.keys(minds).map((id) => [id, {
           mood: minds[id].mood, energy: minds[id].energy, cooldown: Object.keys(minds[id].cooldown),
+          // V5 执行期：这三项决定「会不会播状态忙碌」，而它们**从 DOM 上都看不到** ——
+          // 取证时正是因为读不到它们，只能看到「档位没变」却不知为何。探针补上，
+          // 让这一类「静默不生效」下次能一眼定位。
+          working: minds[id].working === true,
+          held: !!actorOf(id, 'held'),
+          duetBusy: !!actorOf(id, 'busy'),
+          clip: actorOf(id, 'clipName'),
         }])),
       })
       wireGestures(world)
@@ -1201,7 +1306,11 @@ window.__ModuleLoader__.load({
         const dt = Math.min(0.05, (now - last) / 1000)
         last = now
         if (!document.hidden) {
-          world.step(dt)                  // spec R4 + V1 的位移权威：位置仍然只由世界改
+          // spec R4 + V1 的位移权威：位置仍然只由世界改。
+          // V5：把「这只在忙吗」作为**显式参数**传进去，而不是让世界自己去够 minds ——
+          // createWorld 建在心智之前（minds 在 start() 里才建），世界拿不到它。
+          // 判定走**纯函数** `busyClipOf`，与单测用同一份逻辑 —— 不在这里重写一遍条件。
+          world.step(dt, (act) => busyClipOf(minds[act.pet.id], act) !== null)
           // 位置落定后同步进心智 —— 导演读的是心智上的位置（缺它就 NaN，永远开不了合演）。
           for (const a of world.actors) {
             const m = minds[a.pet.id]
@@ -1263,11 +1372,15 @@ window.__ModuleLoader__.load({
     let probe = null
 
     exports.__kylinContract = Object.freeze({
-      ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, BOND, BALANCE_TIERS, ANIM_EXT, qualified,
+      ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, BUSY_CLIP, BOND, BALANCE_TIERS, ANIM_EXT, qualified,
       INTENTS, TUNING,
+      // V5：两张文案表 + 应和句也挂出来 —— 它们要能被跨 realm 单测逐字钉住，
+      // 否则「代码里写了什么词」只能靠人读源码确认。
+      LINES_STIMULUS, LINES_WORKING, ECHO_DONE,
       pairId, normalizeBondPair, applyBondEvents, tierOf, tierClip, balanceCue, curiosityOf,
       readBond, queueBondEvent,
       createMind, stepMind, unlocked, socialGate, chooseIntent,
+      busyClipOf,
       // deliverStimulus 是**唯一新增**的契约键（计划列的键里没有它）：计划 Step 3 把它定义在 start()
       // 内，跨 realm 单测够不到，而 Step 5 第 1 条要求「play 未被同步调用」有观测口。详见 §3.6 注释。
       deliverStimulus,

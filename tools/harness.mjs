@@ -66,12 +66,16 @@ async function readBalanceImpl() {
   return unavailable(balanceCase, 'harness switch', at)
 }
 
-function payloadFor(name) {
+function payloadFor(name, params) {
   if (name === 'agent/error') {
     const err = new Error('harness injected failure')
     err.name = 'InjectedFailure'
     return { error: err }
   }
+  // V5：执行期的两个注入口。真宿主里 status 由引擎定、name 由工具调用定；
+  // 这里只是把同样形状的载荷造出来，不发任何假信号。
+  if (name === 'agent/status') return { agent: {}, status: (params && params.status) || 'running' }
+  if (name === 'tools/pre-execute') return { name: (params && params.tool) || 'Read' }
   return {}
 }
 
@@ -79,10 +83,10 @@ function payloadFor(name) {
  * ⚠️ 开发期后门，**只存在于 harness**：entry.js 里没有它，生产路径也没有。
  * 它按事件名把真监听器派发一次（waterfall 给一个计数 next），用于取证。
  */
-function emitHost(name) {
+function emitHost(name, params) {
   const fns = listeners.get(name) || []
   let relayed = 0
-  for (const fn of fns) fn(payloadFor(name), () => { relayed += 1 })
+  for (const fn of fns) fn(payloadFor(name, params), () => { relayed += 1 })
   return { name: name, listeners: fns.length, relayed: relayed }
 }
 
@@ -129,7 +133,18 @@ createServer((req, res) => {
   if (url.pathname === '/__emit') {
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'method-not-allowed' })
     const name = url.searchParams.get('name') || ''
-    return sendJson(res, 200, emitHost(name))
+    return sendJson(res, 200, emitHost(name, {}))
+  }
+  // V5：执行期的两个注入口。用 POST + 单次派发，语义与 /__emit 一致。
+  if (url.pathname === '/__status') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'method-not-allowed' })
+    const to = url.searchParams.get('to') || 'running'
+    return sendJson(res, 200, emitHost('agent/status', { status: to }))
+  }
+  if (url.pathname === '/__tool') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'method-not-allowed' })
+    const tool = url.searchParams.get('name') || 'Read'
+    return sendJson(res, 200, emitHost('tools/pre-execute', { tool: tool }))
   }
   if (url.pathname === '/__balance') {
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'method-not-allowed' })

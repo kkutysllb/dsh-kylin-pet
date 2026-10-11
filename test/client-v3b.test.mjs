@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
+import { TOOL_CLASS } from '../src/shared/contract.js'
 
 /** JSON 归一化 + 键排序：跨 realm 对象不能直接 deepStrictEqual（原型不等会误判）。 */
 function canon(value) {
@@ -230,3 +231,97 @@ test('deliverStimulus(null / 未知 kind) 不抛：缺了守卫会让 since 不�
   assert.equal(minds.kylinzi.mood, 0)
 })
 
+
+// ── V5：执行期的「在忙」面（client 侧）───────────────────────────────
+// 替身只带被测代码真正会读的字段。**刻意不抄整套 actor/mind** —— 抄一份完整替身
+// 等于把实现抄一遍，实现改了替身还是绿的（本片之前为此栽过一次）。
+function v5Actor(id, over) {
+  const a = {
+    pet: { id: id }, held: false, busy: false, target: null, said: [],
+    say(text) { if (text) this.said.push(text) },
+  }
+  return Object.assign(a, over || {})
+}
+function v5Mind(over) {
+  return Object.assign({
+    petId: 'kylinzi', mood: 0, energy: 1, attention: 'free', working: false,
+    cooldown: {}, bond: { affinity: 0, familiarity: 0 }, recent: [],
+  }, over || {})
+}
+const V5CFG = {
+  cast: [{ id: 'kylinzi' }, { id: 'xisha' }],
+  directing: { workStatus: { kylinzi: ['ok'], xisha: ['fail'] } },
+}
+
+test('A8 busyClipOf：只有在忙、没被拎起、且不在合演时才给「状态忙碌」', () => {
+  const m = v5Mind({ working: true })
+  assert.equal(C.busyClipOf(m, v5Actor('kylinzi')), C.BUSY_CLIP)
+  assert.equal(C.busyClipOf(m, v5Actor('kylinzi', { held: true })), null, '被拎起时该播「被拎起」')
+  assert.equal(C.busyClipOf(m, v5Actor('kylinzi', { busy: true })), null, '合演中由导演点播，忙碌不该盖掉它')
+  assert.equal(C.busyClipOf(v5Mind({ working: false }), v5Actor('kylinzi')), null)
+  assert.equal(C.busyClipOf(null, v5Actor('kylinzi')), null)
+  assert.equal(C.busyClipOf(v5Mind(), null), null)
+  // 素材表里那一段**真的存在** —— 名字写错 = 永远播不出来，而 play 的失败是静默的。
+  assert.ok(C.CLIPS.walk.indexOf(C.BUSY_CLIP) >= 0, 'BUSY_CLIP 必须在 walk 档里')
+  assert.ok(C.LOOPING.indexOf('walk') >= 0, '忙碌段是循环档：长时间重复播它是预期，不是卡帧')
+})
+
+test('A8 deliverStimulus：working 让**全员**进入忙碌态，但只有主讲开口', () => {
+  const minds = { kylinzi: v5Mind({ petId: 'kylinzi' }), xisha: v5Mind({ petId: 'xisha' }) }
+  const actors = [v5Actor('kylinzi'), v5Actor('xisha')]
+  const touched = C.deliverStimulus(minds, actors, { kind: 'working', detail: 'read' }, V5CFG)
+  // `touched` 是 **vm 里**造的数组，原型与外层不同 —— deepStrictEqual 会判不等。
+  // 同文件其它跨 realm 断言一律走 canon()，这里也一样。
+  assert.deepEqual(canon(touched), canon(['kylinzi']), '开口的只有主讲')
+  assert.equal(minds.kylinzi.working, true)
+  assert.equal(minds.xisha.working, true, '忙碌是**全员**的：两只都在同一台机器上干活')
+  assert.deepEqual(actors[0].said, ['在翻文件'])
+  assert.deepEqual(actors[1].said, [], '在忙期间另一只不说话（那会变成两条气泡互相刷）')
+})
+
+test('A9 deliverStimulus：working-done 清忙碌、主讲说「干完了」、另一只应「嗯」', () => {
+  const minds = { kylinzi: v5Mind({ petId: 'kylinzi', working: true }), xisha: v5Mind({ petId: 'xisha', working: true }) }
+  const actors = [v5Actor('kylinzi'), v5Actor('xisha')]
+  C.deliverStimulus(minds, actors, { kind: 'working-done', detail: '' }, V5CFG)
+  assert.equal(minds.kylinzi.working, false)
+  assert.equal(minds.xisha.working, false)
+  assert.deepEqual(actors[0].said, [C.LINES_STIMULUS['working-done']])
+  assert.deepEqual(actors[1].said, [C.ECHO_DONE], '另一只在**收工这一下**应一声')
+})
+
+test('qualified：执行期主讲 = workStatus 挂 ok 的那只；没分工就都算主讲', () => {
+  assert.deepEqual(C.qualified('working', V5CFG), ['kylinzi'])
+  assert.deepEqual(C.qualified('working-done', V5CFG), ['kylinzi'])
+  const bare = { cast: [{ id: 'kylinzi' }, { id: 'xisha' }] }
+  assert.deepEqual(C.qualified('working', bare).slice().sort(), ['kylinzi', 'xisha'], '没配 workStatus 时不能谁都不说话')
+})
+
+test('文案表覆盖 classifyTool 的每一个落点（漏一个就是那类工具永远只会说「在忙着」）', () => {
+  for (const cls of Object.keys(TOOL_CLASS)) {
+    assert.equal(typeof C.LINES_WORKING[cls], 'string', '类别 ' + cls + ' 没有台词')
+  }
+  assert.equal(C.LINES_WORKING.other, '在忙着')
+  for (const [k, v] of Object.entries(C.LINES_WORKING)) assert.ok(v.length > 0, k + ' 的台词为空')
+})
+
+
+test('V5 socialGate：任务执行期间不开新合演（自己忙、对方忙都要挡住）', () => {
+  const free = v5Mind({ petId: 'kylinzi' })
+  const mate = v5Mind({ petId: 'xisha' })
+  const working = v5Mind({ petId: 'kylinzi', working: true })
+  assert.equal(C.socialGate('greet', working, mate, 100), 'working', '自己在忙时不该开新合演')
+  assert.equal(C.socialGate('greet', free, working, 100), 'partner-working', '对方在忙时也不该开')
+  // 回归：都不忙时必须放行 —— 别把合演一起禁了。
+  assert.equal(C.socialGate('greet', free, mate, 100), null)
+})
+
+test('V5 deliverStimulus：任务开始时停下手里的事（清 target），收工不清', () => {
+  const minds = { kylinzi: v5Mind({ petId: 'kylinzi' }), xisha: v5Mind({ petId: 'xisha' }) }
+  const actors = [v5Actor('kylinzi', { target: { x: 500, y: 400 } }), v5Actor('xisha', { target: { x: 300, y: 300 } })]
+  C.deliverStimulus(minds, actors, { kind: 'working', detail: 'exec' }, V5CFG)
+  assert.equal(actors[0].target, null, '听到有活要停下手里的散步，否则忙碌档要等它走到站才出现')
+  assert.equal(actors[1].target, null)
+  actors[0].target = { x: 1, y: 2 }
+  C.deliverStimulus(minds, actors, { kind: 'working-done', detail: '' }, V5CFG)
+  assert.deepEqual(actors[0].target, { x: 1, y: 2 }, '收工不该动 target（那时它该自由活动）')
+})

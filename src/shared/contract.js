@@ -31,8 +31,55 @@ export const CLIPS = Object.freeze({
 /** 循环播放的档（其余为一次性，播完回 idle）。 */
 export const LOOPING = Object.freeze(['idle', 'walk'])
 
-/** 诱因种类：host 产、client 消费。client 逐字镜像一份，由一致性测试钉死。 */
-export const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting'])
+/**
+ * 「任务在忙」播的那一段（V5）。
+ *
+ * 它在 `walk` 档里 —— 该档是**循环档**，所以长时间重复播它是预期行为，不是卡帧。
+ * 提成具名常量而不是在实现里写中文字面量：素材名是会改的（M0 的资产管线重烘过一轮），
+ * 而「忙碌时播哪一段」是一个**设计决定**，应当有名字。
+ */
+export const BUSY_CLIP = '状态忙碌'
+
+/** 诱因种类：host 产、client 消费。client 逐字镜像一份，由一致性测试钉死。
+ *
+ * `working` / `working-done` 是 V5 加的「执行期」面：前三个都在**回合边界**，
+ * 回合开始到结束之间原本没有任何信号，所以任务执行时两只宠完全安静。
+ */
+export const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting', 'working', 'working-done'])
+
+/**
+ * 工具分类表 —— **唯一真源**。host 用它分类、client 用它出文案，两边都不许各写一份。
+ *
+ * 为什么单独强调：本片之前踩过「同一语义两处各写一份、各自都对、合起来恒假」的坑
+ * （`NEAR_RADIUS` host 150 / client 156.8，靠漂移门才发现）。分类表比它更容易分叉 ——
+ * 它是**枚举**不是数值，分叉了不会有任何测试红，只会让某类工具悄悄说错话。
+ *
+ * 名字按真实拼写收录（`Read` 与 `web_search` 并存，因为不同工具族的命名本就不同源）。
+ */
+export const TOOL_CLASS = Object.freeze({
+  read: Object.freeze(['Read', 'Glob', 'Grep', 'read_image', 'read']),
+  write: Object.freeze(['Write', 'Edit', 'edit', 'write']),
+  exec: Object.freeze(['Bash', 'bash', 'task']),
+  web: Object.freeze(['WebSearch', 'WebFetch', 'web_search', 'web_fetch']),
+  agent: Object.freeze(['Task', 'subagent', 'dispatch']),
+  other: Object.freeze([]),
+})
+
+/** 反查表：模块加载时建一次 ⇒ 分类 O(1)（`tools/pre-execute` 是热路径）。 */
+const CLASS_OF = new Map()
+for (const cls of Object.keys(TOOL_CLASS)) {
+  for (const tool of TOOL_CLASS[cls]) CLASS_OF.set(tool, cls)
+}
+
+/**
+ * 工具名 → 类别。**未知一律落 `other`，不猜** —— 猜错比不说更糟。
+ * @param {unknown} name
+ * @returns {string}
+ */
+export function classifyTool(name) {
+  if (typeof name !== 'string' || name === '') return 'other'
+  return CLASS_OF.get(name) || 'other'
+}
 
 /** 账本边界（spec §4.5）。夹取与环形上限都从这里取，别在实现里写魔数。 */
 export const BOND = Object.freeze({
