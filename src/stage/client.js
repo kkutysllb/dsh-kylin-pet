@@ -87,22 +87,13 @@ window.__ModuleLoader__.load({
     })
     const BOND_FLUSH_MS = 2000      // §4.5：客户端防抖 2s；host 是唯一写者，这里只排队
     const BALANCE_POLL_MS = 30000   // 余额变化慢、还要打外部网络：与 1s 的 /state 分开，频率低一点更礼貌
-    /** 气泡文案（原创；client 私有 —— host 不消费，故不进 __kylinContract）。 */
-    const LINES = Object.freeze({ 'turn-ok': '稳了', 'turn-fail': '让我想想', waiting: '在呢' })
+    /** 诱因气泡文案（原创）。**STIMULUS 后缀由 V3b Task 4 加的**：LINES 这个名字让给了 §3.9 的剧本台词表。 */
+    const LINES_STIMULUS = Object.freeze({ 'turn-ok': '稳了', 'turn-fail': '让我想想', waiting: '在呢' })
     const ANIM_EXT = '.webm'
     const STAGE_ID = 'dsh-kylin-pet-stage'
     const DROP_DISTANCE = 120   // spec §8：拖到一起放下即触发一次近距离互动
 
     exports.inject = []
-    // 函数声明在装载期就提升到位，所以契约能在这一行冻结它们；状态（bondState）是 let，
-    // 函数体读的是**调用时**的值 —— readBond() 因此是实时快照，而不是加载时的副本。
-    exports.__kylinContract = Object.freeze({
-      ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, BOND, BALANCE_TIERS, ANIM_EXT, qualified,
-      INTENTS, TUNING,
-      pairId, normalizeBondPair, applyBondEvents, tierOf, tierClip, balanceCue, curiosityOf,
-      readBond, queueBondEvent,
-      createMind, stepMind, unlocked, socialGate, chooseIntent,
-    })
 
     /* ==================== §2 小工具 ==================== */
     const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
@@ -515,6 +506,279 @@ window.__ModuleLoader__.load({
       return { intent: best.intent, family: best.family, gate: null, score: best.score, all: cands }
     }
 
+    /* ==================== §3.7 导演 Director 与互动 Interaction ==================== */
+    /** 剧本的可见编排：每个阶段该做什么。剧本**只允许**用这些动作，不得碰 DOM。 */
+    const PHASES = ['approach', 'open', 'exchange', 'settle']
+
+    /**
+     * 建一个导演。
+     * 铁律（spec §6）：动作槽最多 1 个合演 + 每宠 1 个独演；仲裁败者**退回独处链，不报错不排队**；
+     * 收尾唯一入口 —— 账本与记忆只在这里写。
+     */
+    function createDirector(opts) {
+      const world = opts.world
+      const minds = opts.minds          // petId -> mind
+      const model = opts.model          // { cooldowns, affinity, familiarity, ... } 由外部镜像
+      const rng = opts.rng || Math.random
+      const stick = opts.onStimulus || function () {}
+      let duet = null                   // 当前唯一的合演
+      let clock = 0                     // **导演自己的时钟**：只由 step(dt) 推进；时间戳一律显式传参，不塞进心智状态
+      const memories = []               // { at, kind, actors, outcome }
+
+      const pairKey = world.pairKey
+      function bondOf() { return model.bond || { affinity: 0, familiarity: 0 } }
+
+      /** 优先级 = |affinity| × 意图强度 × 新鲜度（spec §6）。这里用「上次同剧本距今越久越新鲜」。 */
+      function priority(intent, mind, at) {
+        const a = Math.abs(bondOf().affinity)
+        const strength = mind.energy
+        const last = (mind.recent || []).filter((r) => r.kind === intent).pop()
+        const fresh = last ? clamp((at - last.at) / 300, 0, 1) : 1
+        return a * strength * fresh + strength
+      }
+
+      /** 找一个可配对的对手：对方此刻空闲、没被拎起、且不是我自己。 */
+      function freePartner(self) {
+        for (const a of world.actors) {
+          // 计划原文写 a === self.actor，但调用点是 freePartner(actor)（见本节的 step）——
+          // 逐字照抄会把「自己」当对手返回，乃至与自己合演。按本节文档注释「不是我自己」最小改写。
+          if (a === self) continue
+          if (a.held) continue
+          if (a.busy) continue
+          return a
+        }
+        return null
+      }
+
+      /** 开一场合演。**同一时刻只允许一场**（动作槽）。 */
+      function open(initiatorActor, responderActor, kind, at) {
+        if (duet) return null
+        duet = {
+          kind: kind,
+          initiator: initiatorActor.pet.id,
+          responder: responderActor.pet.id,
+          phase: 'approach',
+          deadline: TUNING.PHASE_TIMEOUT_SEC.approach,
+          outcome: null,
+          at: at,
+        }
+        initiatorActor.busy = true
+        responderActor.busy = true
+        return duet
+      }
+
+      /** 终局：写账本 + 双方记忆 + 冷却。**这是唯一写账本的地方**。 */
+      function settle(kind, actorA, actorB, effectName, at) {
+        const eff = TUNING.EFFECT[effectName] || { affinity: 0, familiarity: 0 }
+        const ev = {
+          pair: pairKey,
+          kind: kind,
+          affinityDelta: eff.affinity,
+          familiarityDelta: eff.familiarity,
+          at: at,
+        }
+        model.bond = {
+          affinity: clamp(bondOf().affinity + eff.affinity, BOND.AFFINITY_MIN, BOND.AFFINITY_MAX),
+          familiarity: Math.max(0, bondOf().familiarity + Math.max(0, eff.familiarity)),
+        }
+        for (const a of [actorA, actorB]) {
+          if (!a) continue
+          const m = minds[a.pet.id]
+          if (!m) continue
+          m.mood = clamp(m.mood + (eff.affinity > 0 ? 0.2 : eff.affinity < 0 ? -0.2 : 0), -1, 1)
+          m.recent = m.recent.concat([{ kind: kind, at: at, delta: eff.affinity }]).slice(-TUNING.MEMORY_MAX)
+          m.cooldown[kind] = TUNING.COOLDOWN_SEC[kind] || 60
+        }
+        // 计划注释②：busy 的清除必须在 settle 与 abort **两条路**上都发生（只清 abort 会让宠永久卡住）。
+        // 原文此处漏了 —— 按注释补上；置空后 freePartner 才可能配到新的一对。
+        for (const a of [actorA, actorB]) if (a) a.busy = false
+        memories.push({ kind: kind, at: at, affinity: eff.affinity })
+        if (memories.length > 50) memories.shift()
+        stick([ev])                     // ← V3 的 queueBondEvent：防抖 + PUT /bond，**不在这里**
+        return ev
+      }
+
+      /** 中断：被用户拎走 / 超时。要**写记忆**（被谁打断是心智的输入）。 */
+      function abort(reason) {
+        if (!duet) return null
+        const done = duet
+        done.outcome = 'abort:' + reason
+        for (const id of [done.initiator, done.responder]) {
+          const m = minds[id]
+          if (m) m.recent = m.recent.concat([{ kind: done.kind, at: done.at, delta: 0, aborted: reason }]).slice(-TUNING.MEMORY_MAX)
+        }
+        for (const a of world.actors) a.busy = false
+        memories.push({ kind: done.kind, at: done.at, aborted: reason })
+        duet = null
+        return done
+      }
+
+      /** 每拍推进一次合演。返回本拍发生的事（给测试与取证观察）。 */
+      function step(dt) {
+        clock += dt                      // 时钟只在这里走
+        const events = []
+        for (const a of world.actors) {
+          const m = minds[a.pet.id]
+          if (m) stepMind(m, dt)
+        }
+
+        if (duet) {
+          // 对手被拎走 ⇒ 立即中断（spec §6）
+          const held = world.actors.find((a) => a.pet.id === duet.responder || a.pet.id === duet.initiator)
+          if (held && held.held) { events.push({ type: 'abort', detail: abort('partner-held') }); return events }
+          duet.deadline -= dt
+          if (duet.deadline <= 0) { events.push({ type: 'abort', detail: abort('timeout') }); return events }
+          const i = PHASES.indexOf(duet.phase)
+          // 阶段推进由剧本的 phaseSignal 决定；这里只做兜底推进，避免卡死
+          if (duet.advance) { duet.phase = PHASES[Math.min(PHASES.length - 1, i + 1)]; duet.deadline = TUNING.PHASE_TIMEOUT_SEC[duet.phase] }
+          return events
+        }
+
+        // 没有合演：每只宠各选一个意图；社交意图要配对成功才升格为合演
+        for (const a of world.actors) {
+          if (a.held || a.busy) continue
+          const m = minds[a.pet.id]
+          if (!m) continue
+          const other = freePartner(a)
+          const pick = chooseIntent(m, other ? minds[other.pet.id] : null, rng)
+          events.push({ type: 'intent', pet: a.pet.id, intent: pick.intent, family: pick.family })
+          if (pick.family !== 'social' || !other) { a.play(pick.intent === 'walk' ? 'walk' : pick.intent === 'nap' ? 'idle' : 'idle'); continue }
+          // 仲裁：两只都要同一场时才成；否则按优先级，败者退回独处链
+          const mine = priority(pick.intent, m, clock)
+          const theirs = priority(pick.intent, minds[other.pet.id], clock)
+          if (theirs > mine) { a.play('idle'); continue }     // 败者退回独处链，不报错、不排队
+          const created = open(a, other, pick.intent, clock)
+          if (created) events.push({ type: 'open', detail: created })
+          return events
+        }
+        return events
+      }
+
+      return {
+        get duet() { return duet },
+        get memories() { return memories.slice() },
+        step: step, settle: settle, abort: abort, open: open,
+        priority: priority, freePartner: freePartner,
+      }
+    }
+
+    /* ==================== §3.9 剧本（声明式编排表 + 原创文案 + 阶段推进谓词） ==================== */
+    /**
+     * 8 个剧本的编排表（spec §7）。每阶段只允许三件事：
+     *   clip  —— 播哪一档（**必须**来自 CLIPS 的 6 档之一）
+     *   say   —— 冒哪句气泡（来自 LINES）
+     *   move  —— 谁朝谁走近（approach / contest 用）
+     * `until` 是阶段推进谓词名，实现见 §Director 的 ADVANCE。
+     */
+    const SCRIPTS = Object.freeze({
+      greet: {
+        effect: 'greet',
+        phases: {
+          approach: { clip: 'walk', move: 'toward', until: 'near' },
+          open:     { clip: 'turn', facing: 'toward', until: 'turned' },
+          exchange: { clip: 'happy', say: 'greet', until: 'once' },
+          settle:   { clip: 'idle', until: 'immediate' },
+        },
+      },
+      gift: {
+        effect: ['gift', 'giftIgnored'],      // 对方接不接受是 Outcome；两条 effect 由 exchange 的结果选
+        phases: {
+          approach: { clip: 'walk', move: 'toward', until: 'near' },
+          open:     { clip: 'happy', say: 'gift', until: 'once' },
+          exchange: { clip: 'turn', until: 'once' },          // 对方开心或无视，表现相同、账本不同
+          settle:   { clip: 'idle', until: 'immediate' },
+        },
+      },
+      tease: {
+        effect: 'tease',
+        phases: {
+          approach: { clip: 'walk', move: 'toward', until: 'veryNear' },
+          open:     { clip: 'turn', facing: 'away', say: 'tease', until: 'turned' },
+          exchange: { clip: 'sad', who: 'responder', until: 'once' },   // 只有**对方**难过（spec §7）
+          settle:   { clip: 'idle', until: 'immediate' },
+        },
+      },
+      comfort: {
+        effect: 'comfort',
+        phases: {
+          approach: { clip: 'walk', move: 'toward', until: 'near' },
+          open:     { clip: 'idle', say: 'comfort', until: 'once' },
+          exchange: { clip: 'happy', who: 'responder', until: 'once' },
+          settle:   { clip: 'idle', until: 'immediate' },
+        },
+      },
+      shoulder: {
+        effect: 'shoulder',
+        phases: {
+          approach: { clip: 'walk', move: 'toward', until: 'near' },
+          open:     { clip: 'idle', facing: 'toward', until: 'immediate' },
+          exchange: { clip: 'idle', until: 'hold3s' },                  // 相向而立，呼吸相位错开
+          settle:   { clip: 'idle', move: 'apart', until: 'once' },
+        },
+      },
+      chase: {
+        effect: 'chase',
+        phases: {
+          approach: { clip: 'walk', move: 'toward', until: 'veryNear' },
+          open:     { clip: 'walk', say: 'chase', until: 'once' },
+          exchange: { clip: 'walk', until: 'hold4s' },                  // 位置驱动：撞边界换向
+          settle:   { clip: 'idle', until: 'immediate' },
+        },
+      },
+      reconcile: {
+        effect: 'reconcile',
+        phases: {
+          approach: { clip: 'walk', move: 'toward', until: 'near' },
+          open:     { clip: 'sad', say: 'reconcile', until: 'once' },
+          exchange: { clip: 'happy', say: 'gift', until: 'once' },      // 主动 + 献宝（spec §7）
+          settle:   { clip: 'idle', until: 'immediate' },
+        },
+      },
+      contest: {
+        effect: 'contest',
+        phases: {
+          approach: { clip: 'walk', move: 'point', until: 'arrived' },  // 双方冲向同一点
+          open:     { clip: 'turn', say: 'contest', until: 'once' },
+          exchange: { clip: 'happy', who: 'winner', until: 'once' },    // 先到者得
+          settle:   { clip: 'idle', until: 'immediate' },
+        },
+      },
+    })
+
+    /** 文案表：剧本 × 角色。**全原创**（不带任何上游措辞），V4 可顺势换表情包图。 */
+    const LINES = Object.freeze({
+      greet:     { kylinzi: '来啦',     xisha: '嗯' },     // 「在呢」与 waiting 撞句，已拆
+      gift:      { kylinzi: '看看这个', xisha: '……谢谢' },
+      tease:     { kylinzi: '略',       xisha: '……' },
+      comfort:   { kylinzi: '别难过',   xisha: '我没事' },
+      chase:     { kylinzi: '别跑',     xisha: '你追不上' },
+      reconcile: { kylinzi: '我错了',   xisha: '……算了' },
+      contest:   { kylinzi: '我先',     xisha: '我先' },
+    })
+
+    /**
+     * 合演双方的当前距离（纯读）。
+     * 计划正文的 ADVANCE 引用了 dist(d, w)，但计划没有给它的定义 —— 这里按同一语义补上（不改任何状态）。
+     */
+    function dist(d, w) {
+      const a = w.actors.find((x) => x.pet.id === d.initiator)
+      const b = w.actors.find((x) => x.pet.id === d.responder)
+      if (!a || !b) return Infinity
+      return Math.hypot(b.x - a.x, b.y - a.y)
+    }
+
+    /** 谓词：给 (duet, world, dt) 判「本阶段结束了吗」。全部是**纯读**，不改状态。 */
+    const ADVANCE = {
+      near:      (d, w) => dist(d, w) <= TUNING.NEAR_RADIUS,
+      veryNear:  (d, w) => dist(d, w) <= TUNING.NEAR_RADIUS * 0.6,
+      turned:    (d, w) => w.sincePhase >= 0.4,        // 转身动作放完约 0.4s
+      once:      (d, w) => w.sincePhase >= 0.6,        // 一次性档播完就够
+      immediate: (d, w) => w.sincePhase >= 0.2,
+      hold3s:    (d, w) => w.sincePhase >= 3.0,
+      hold4s:    (d, w) => w.sincePhase >= 4.0,
+      arrived:   (d, w) => w.sincePhase >= 1.5,        // 争抢：谁先到由 world 的位置比较决定，这里只做兜底
+    }
+
     /* ==================== §4 世界（唯一位移权威） ==================== */
     const ANCHORS = {
       'top-right': [0.86, 0.34],
@@ -640,7 +904,7 @@ window.__ModuleLoader__.load({
         for (const id of qualified(stimulus.kind, opts.config)) {
           const a = actors.find((x) => x.pet.id === id)
           if (!a || a.held) continue
-          a.say(LINES[stimulus.kind])
+          a.say(LINES_STIMULUS[stimulus.kind])
           a.play(CLIP_OF[stimulus.kind])
           a.next = rand(2, 4)
           acted.push(id)
@@ -797,6 +1061,17 @@ window.__ModuleLoader__.load({
       pollBalance()
       console.info('[dsh-kylin-pet] 舞台已就绪：' + config.cast.map((p) => p.id).join(' + '))
     }
+
+    // 契约在工厂体**末尾**冻结：函数声明在装载期就提升到位，所有 const 表（含 §3.9 的 SCRIPTS / ADVANCE / LINES）
+    // 到这里也已初始化；状态（bondState）是 let，函数体读的是**调用时**的值 —— readBond() 因此是实时快照。
+    exports.__kylinContract = Object.freeze({
+      ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, BOND, BALANCE_TIERS, ANIM_EXT, qualified,
+      INTENTS, TUNING,
+      pairId, normalizeBondPair, applyBondEvents, tierOf, tierClip, balanceCue, curiosityOf,
+      readBond, queueBondEvent,
+      createMind, stepMind, unlocked, socialGate, chooseIntent,
+      createDirector, SCRIPTS, ADVANCE, LINES,
+    })
 
     exports.apply = () => {
       start().catch((err) => console.warn('[dsh-kylin-pet] 启动失败：', err))
