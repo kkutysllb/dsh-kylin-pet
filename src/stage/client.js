@@ -29,6 +29,19 @@ window.__ModuleLoader__.load({
     })
     const LOOPING = Object.freeze(['idle', 'walk'])
     const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting'])
+    /** 账本边界（spec §4.5）。夹取与环形上限都从这里取，别在实现里写魔数。 */
+    const BOND = Object.freeze({
+      AFFINITY_MIN: -100,
+      AFFINITY_MAX: 100,
+      HISTORY_MAX: 50,
+      PAIR_SEP: '|',
+    })
+    /** 档位阈值，降序。判定 = 第一个满足 值 >= 阈值 的档；解析不出数字则 tier=null（不猜）。 */
+    const BALANCE_TIERS = Object.freeze([
+      ['充裕', 100], ['健康', 50], ['正常', 20], ['偏低', 5], ['告急', 1], ['见底', 0],
+    ])
+    const BOND_FLUSH_MS = 2000      // §4.5：客户端防抖 2s；host 是唯一写者，这里只排队
+    const BALANCE_POLL_MS = 30000   // 余额变化慢、还要打外部网络：与 1s 的 /state 分开，频率低一点更礼貌
     /** 气泡文案（原创；client 私有 —— host 不消费，故不进 __kylinContract）。 */
     const LINES = Object.freeze({ 'turn-ok': '稳了', 'turn-fail': '让我想想', waiting: '在呢' })
     const ANIM_EXT = '.webm'
@@ -36,7 +49,13 @@ window.__ModuleLoader__.load({
     const DROP_DISTANCE = 120   // spec §8：拖到一起放下即触发一次近距离互动
 
     exports.inject = []
-    exports.__kylinContract = Object.freeze({ ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, ANIM_EXT, qualified })
+    // 函数声明在装载期就提升到位，所以契约能在这一行冻结它们；状态（bondState）是 let，
+    // 函数体读的是**调用时**的值 —— readBond() 因此是实时快照，而不是加载时的副本。
+    exports.__kylinContract = Object.freeze({
+      ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, BOND, BALANCE_TIERS, ANIM_EXT, qualified,
+      pairId, normalizeBondPair, applyBondEvents, tierOf, tierClip, balanceCue, curiosityOf,
+      readBond, queueBondEvent,
+    })
 
     /* ==================== §2 小工具 ==================== */
     const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
@@ -71,6 +90,154 @@ window.__ModuleLoader__.load({
       const want = STATUS_OF[kind]
       const map = (config && config.directing && config.directing.workStatus) || {}
       return cast.filter((p) => (map[p.id] || []).indexOf(want) >= 0).map((p) => p.id)
+    }
+
+    /* ==================== §2.5 账本与余额（契约镜像 + 纯函数 + 实时状态） ==================== */
+    // 全部放工厂作用域：__kylinContract 在**装载期**就冻结了，只有那里的引用才活到运行期。
+    const numOf = (v, fallback) => (Number.isFinite(Number(v)) ? Number(v) : fallback)
+
+    /** 同一对宠永远同一个键：排序后拼接（与 host 的 bond.js 逐字同语义）。 */
+    function pairId(a, b) {
+      return [String(a), String(b)].sort().join(BOND.PAIR_SEP)
+    }
+
+    /** 把任意输入整形为合法的一对记录。永不抛 —— 坏数据只该降级，不该让舞台起不来。 */
+    function normalizeBondPair(raw) {
+      const src = raw && typeof raw === 'object' ? raw : {}
+      const history = Array.isArray(src.history) ? src.history.slice(-BOND.HISTORY_MAX) : []
+      return {
+        affinity: clamp(numOf(src.affinity, 0), BOND.AFFINITY_MIN, BOND.AFFINITY_MAX),
+        familiarity: Math.max(0, numOf(src.familiarity, 0)),
+        lastAt: Math.max(0, numOf(src.lastAt, 0)),
+        history: history,
+      }
+    }
+
+    /**
+     * 本地施加一批事件 —— **必须与 host 的 bond.js 同语义**：affinity 夹 [-100,100]、
+     * familiarity 只增（负增量丢弃）、history 环形 50。允许重复、禁止漂移。
+     */
+    function applyBondEvents(pair, events) {
+      let out = normalizeBondPair(pair)
+      const list = Array.isArray(events) ? events : []
+      for (const ev of list) {
+        const dA = numOf(ev && ev.affinityDelta, 0)
+        const dF = numOf(ev && ev.familiarityDelta, 0)
+        const at = numOf(ev && ev.at, Date.now())
+        out = {
+          affinity: clamp(out.affinity + dA, BOND.AFFINITY_MIN, BOND.AFFINITY_MAX),
+          familiarity: Math.max(0, out.familiarity + Math.max(0, dF)),   // 只增：负增量被丢弃
+          lastAt: Math.max(out.lastAt, at),
+          history: out.history.concat([{
+            kind: String((ev && ev.kind) || 'unknown'),
+            at: at,
+            affinityDelta: dA,
+            familiarityDelta: dF,
+          }]).slice(-BOND.HISTORY_MAX),
+        }
+      }
+      return out
+    }
+
+    /** 档位判定（与 host 的 ledger.js 同语义）：解析不出有限数就 null —— 不猜。 */
+    function tierOf(total) {
+      if (total === null || total === undefined) return null
+      if (typeof total === 'string' && total.trim() === '') return null
+      const n = typeof total === 'string' ? Number(total.trim()) : Number(total)
+      if (!Number.isFinite(n)) return null
+      for (const entry of BALANCE_TIERS) if (n >= entry[1]) return entry[0]
+      return BALANCE_TIERS[BALANCE_TIERS.length - 1][0]
+    }
+
+    /** 档位名 -> [表现档, 素材名]；CLIPS 里没有这一段就 null（不猜、不乱播）。 */
+    function tierClip(tier) {
+      const name = '余额' + String(tier)
+      if (CLIPS.happy.indexOf(name) >= 0) return ['happy', name]
+      if (CLIPS.sad.indexOf(name) >= 0) return ['sad', name]
+      return null
+    }
+
+    /**
+     * 余额播报判定（纯函数）—— 「绝不伪造数字」的落地点：
+     * 只有 kind==='ok' 且档位与上次**不同**才回档位名；tier===null 或 kind==='unavailable' 一律 null。
+     */
+    function balanceCue(entry, prevTier) {
+      if (!entry || entry.kind !== 'ok') return null
+      const tier = typeof entry.tier === 'string' && entry.tier !== '' ? entry.tier : null
+      if (tier === null || tier === prevTier) return null
+      return tier
+    }
+
+    /** affinity 越高越容易「好奇凑过来」（取代 V1 写死的 50%）；affinity=0 时仍是 0.5，旧观感不变。 */
+    function curiosityOf(affinity) {
+      return clamp(0.5 + clamp(numOf(affinity, 0), BOND.AFFINITY_MIN, BOND.AFFINITY_MAX) / 200, 0.25, 0.9)
+    }
+
+    /* ---------- 实时状态（契约里的 readBond 读的就是这里的当前值） ---------- */
+    let bondState = { pairKey: '', affinity: 0, familiarity: 0, lastAt: 0, history: [] }
+    let bondQueue = []   // 待发 delta：PUT 失败**不清空** —— 丢了就是关系丢了
+    let bondTimer = null
+    let lastTier = null  // 上次播报过的档位（只在变化时播）
+
+    /** 账本实时快照（不是加载时的副本）—— 验收靠它证「客户端确实读到了」。 */
+    function readBond() {
+      return { pairKey: bondState.pairKey, affinity: bondState.affinity, familiarity: bondState.familiarity }
+    }
+
+    /** 启动读一次账本；任何失败（宿主不在 / 404 / 坏 JSON）都回 null，由 normalizeBondPair 降级成 0/0。 */
+    async function loadBondPair(pairKey) {
+      try {
+        const res = await fetch(ROUTE_PREFIX + '/bond', { cache: 'no-store' })
+        if (!res.ok) return null
+        const body = await res.json()
+        return body && body.pairs ? body.pairs[pairKey] : null
+      } catch (err) {
+        return null
+      }
+    }
+
+    /**
+     * 本地先记（affinity 立刻影响行为），再 2s 防抖提交。host 是账本唯一写者，这里只排队。
+     * @param {{pair?: string, kind?: string, affinityDelta?: number, familiarityDelta?: number, at?: number}} ev
+     */
+    function queueBondEvent(ev) {
+      const pair = String((ev && ev.pair) || bondState.pairKey || '')
+      if (!pair) return null
+      const full = {
+        pair: pair,
+        kind: String((ev && ev.kind) || 'unknown'),
+        affinityDelta: numOf(ev && ev.affinityDelta, 0),
+        familiarityDelta: numOf(ev && ev.familiarityDelta, 0),
+        at: numOf(ev && ev.at, Date.now()),
+      }
+      bondState = Object.assign({ pairKey: pair }, applyBondEvents(bondState, [full]))
+      bondQueue.push(full)
+      if (bondTimer === null) bondTimer = setTimeout(flushBondQueue, BOND_FLUSH_MS)
+      return full
+    }
+
+    /** 到点把这批 delta 交给 host；**成功才清队列**，失败保留并等下一个窗口重试。 */
+    async function flushBondQueue() {
+      bondTimer = null
+      if (bondQueue.length === 0) return
+      const events = bondQueue.slice()
+      try {
+        const res = await fetch(ROUTE_PREFIX + '/bond', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ events: events }),
+          cache: 'no-store',
+        })
+        if (!res || !res.ok) throw new Error('HTTP ' + String(res && res.status))
+        let body = null
+        try { body = await res.json() } catch (err) { body = null }   // 回账可选：读不到就信本地
+        bondQueue.splice(0, events.length)
+        const saved = body && body.pairs ? body.pairs[bondState.pairKey] : null
+        if (saved) bondState = Object.assign({ pairKey: bondState.pairKey }, normalizeBondPair(saved))
+      } catch (err) {
+        // PUT 失败：保留待发队列，下一个 2s 窗口重试。丢了就是关系丢了。
+        if (bondTimer === null) bondTimer = setTimeout(flushBondQueue, BOND_FLUSH_MS)
+      }
     }
 
     /* ==================== §3 演员 ==================== */
@@ -140,6 +307,7 @@ window.__ModuleLoader__.load({
         x: 0, y: 0,                 // 脚点（px）
         facing: 1,
         clip: null,
+        clipName: null,             // 当前实际素材名（余额档位要播指定那一段，不能随机）
         held: false,
         front: 0,
         rng: rngOf(fnv(pet.id)),
@@ -157,10 +325,14 @@ window.__ModuleLoader__.load({
         vids[1].style.transform = t
       }
 
-      a.play = (clip) => {
-        if (a.clip === clip) return
+      /** 播表现档；给了 exact 就播**那一段**素材（余额档位必须精确到「余额充裕」这类名字）。 */
+      a.play = (clip, exact) => {
+        if (!exact && a.clip === clip) return
+        const chosen = exact || pick(CLIPS[clip], a.rng)
+        if (a.clip === clip && a.clipName === chosen) return
         a.clip = clip
-        const url = animUrl(pet, pick(CLIPS[clip], a.rng))
+        a.clipName = chosen
+        const url = animUrl(pet, chosen)
         const back = vids[1 - a.front]
         back.loop = LOOPING.indexOf(clip) >= 0
         back.setAttribute('src', url)
@@ -297,7 +469,7 @@ window.__ModuleLoader__.load({
         return bestD <= within ? best : null
       }
 
-      /** 拖到一起放下后的 V1 占位：转身面对面 + 各放一次开心。V3 换成真 Interaction。 */
+      /** 拖到一起放下后的 V1 占位：转身面对面 + 各放一次开心。V3 追加账本副作用（+2 好感 / +1 熟悉）。 */
       function bump(a, b) {
         a.setFacing(b.x < a.x ? -1 : 1)
         b.setFacing(a.x < b.x ? -1 : 1)
@@ -305,6 +477,8 @@ window.__ModuleLoader__.load({
         b.play('happy')
         a.next = rand(2, 4)
         b.next = rand(2, 4)
+        // 账本的唯一产生点；写入仍只在 host —— 这里只排队，2s 防抖后 PUT /bond。
+        queueBondEvent({ kind: 'bump', affinityDelta: 2, familiarityDelta: 1 })
       }
 
       /** 诱因 -> 播哪档（waiting 双方探头，只播 idle）。 */
@@ -368,8 +542,8 @@ window.__ModuleLoader__.load({
           if (!dragged) {
             a.play('happy')
             const mate = world.nearest(a, Infinity)
-            // spec §8：对方是否好奇凑过来由关系决定；V1 无账本，先 50% 占位，V3 换 affinity
-            if (mate && !mate.held && Math.random() < 0.5) {
+            // spec §8：对方是否好奇凑过来由**关系**决定（V1 的 50% 占位已被 affinity 取代）
+            if (mate && !mate.held && Math.random() < curiosityOf(bondState.affinity)) {
               mate.setFacing(a.x < mate.x ? -1 : 1)
               mate.play('walk')
               mate.target = { x: a.x + (a.x < mate.x ? 90 : -90), y: a.y }
@@ -419,9 +593,13 @@ window.__ModuleLoader__.load({
         console.warn('[dsh-kylin-pet] 配置里没有 cast，舞台未启动')
         return
       }
+      // §4.5：createWorld 之前先读账本（读不到就用 0/0 —— 降级不崩），bump 才接得上关系。
+      const pairKey = pairId(config.cast[0].id, config.cast[1].id)
+      bondState = Object.assign({ pairKey: pairKey }, normalizeBondPair(await loadBondPair(pairKey)))
       const root = createStageRoot()
       document.body.appendChild(root)
       const world = createWorld({ config: config, root: root })
+      world.pairKey = pairKey
       wireGestures(world)
       let last = performance.now()
       const frame = (now) => {
@@ -448,6 +626,26 @@ window.__ModuleLoader__.load({
       }
       setInterval(poll, 1000)
       poll()
+      // 余额：30s 一读。档位变化才播；tier=null / kind='unavailable' 一律不播（不猜、不假装）。
+      const pollBalance = async () => {
+        try {
+          const res = await fetch(ROUTE_PREFIX + '/balance', { cache: 'no-store' })
+          if (!res.ok) return
+          const entry = await res.json()
+          const tier = balanceCue(entry, lastTier)
+          if (tier === null) return
+          const clip = tierClip(tier)
+          if (clip === null) return
+          lastTier = tier
+          for (const a of world.actors) {
+            if (a.pet.balance !== true) continue   // §8：只有声明了 balance 的宠才播报
+            a.play(clip[0], clip[1])
+            a.say(tier)
+          }
+        } catch (err) { /* 宿主不在时静默：桌宠不该刷屏 */ }
+      }
+      setInterval(pollBalance, BALANCE_POLL_MS)
+      pollBalance()
       console.info('[dsh-kylin-pet] 舞台已就绪：' + config.cast.map((p) => p.id).join(' + '))
     }
 
