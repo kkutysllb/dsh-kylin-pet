@@ -478,7 +478,11 @@ window.__ModuleLoader__.load({
       if (candidate === 'comfort') s += Math.max(0, -other.mood) * 1.2      // 对方越难过越想安慰
       if (candidate === 'tease') s += Math.max(0, self.energy - 0.5) * 1.0
       if (candidate === 'shoulder') s += Math.max(0, bond.affinity) * 0.02
-      if (candidate === 'approach') s += 0.5                                  // 靠近是社交的兜底
+      if (candidate === 'approach') {
+        // 只按「值不值得过去」打分：越远越想过去，已经在身边就没有「过去」可言。
+        // 因此它**不参与**下面的距离惩罚 —— 那条惩罚与它的语义正好相反。
+        return 0.5 * Math.min(1, dist / TUNING.SOCIAL_RADIUS)
+      }
       s -= (dist / TUNING.SOCIAL_RADIUS) * W.distance
       return s
     }
@@ -701,6 +705,18 @@ window.__ModuleLoader__.load({
           const pick = chooseIntent(m, other ? minds[other.pet.id] : null, rng)
           events.push({ type: 'intent', pet: a.pet.id, intent: pick.intent, family: pick.family })
           if (pick.family !== 'social' || !other) { a.play(pick.intent === 'walk' ? 'walk' : pick.intent === 'nap' ? 'idle' : 'idle'); continue }
+          // 意图名 ≠ 剧本名。approach 是「走过去」这个前导动作，SCRIPTS 里没有它。
+          // 没有剧本就**不开合演** —— 否则会 open 一个不存在的剧本，下一拍 abort('no-phase')，
+          // 而 abort 不上冷却 ⇒ 每两拍空转一次（执行期实测）。
+          if (!SCRIPTS[pick.intent]) {
+            if (pick.intent === 'approach' && other) {
+              a.target = { x: other.x, y: other.y }
+              a.play('walk')
+            } else {
+              a.play('idle')
+            }
+            continue
+          }
           // 仲裁：两只都要同一场时才成；否则按优先级，败者退回独处链
           const mine = priority(pick.intent, m, clock)
           const theirs = priority(pick.intent, minds[other.pet.id], clock)

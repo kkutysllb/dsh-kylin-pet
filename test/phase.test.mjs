@@ -51,13 +51,16 @@ function mkActor(id, x, y) {
 }
 
 /**
- * 场景：两只相邻（dist=60 ≤ NEAR_RADIUS 150）、冷却为空、账本可注入。
+ * 场景：两只相邻（默认 dist=60 ≤ NEAR_RADIUS 150）、冷却为空、账本可注入。
+ * `gap` 可覆盖距离 —— Task 4c 的「approach 只在远处赢」需要 dist>288 的观测口，
+ * 贴近场景里那道门根本不会被走到（会假绿）。
  * 心智带 x/y —— chooseIntent 靠它算距离，缺了就 NaN。
  */
-function mkScene(bond) {
+function mkScene(bond, gap) {
   const b = bond || { affinity: 0, familiarity: 0 }
+  const span = gap === undefined ? 60 : gap
   const A = mkActor('kylinzi', 0, 0)
-  const B = mkActor('xisha', 60, 0)
+  const B = mkActor('xisha', span, 0)
   const world = { actors: [A, B], pairKey: 'kylinzi|xisha' }
   const minds = {}
   for (const a of world.actors) {
@@ -247,3 +250,101 @@ test('phaseSpec 缺阶段不抛：abort(no-phase)，不写账本', () => {
   assert.equal(g[0].type, 'abort')
   assert.equal(ghost.d.memories[0].aborted, 'no-phase')
 })
+/* ==================== Task 4c：意图 ≠ 剧本（Step 3 的五条） ==================== */
+
+/**
+ * approach 的打分读口。`socialScore` 不在 `__kylinContract` 里（本 Task 不改契约），
+ * `chooseIntent().all` 是唯一能取到候选分数的口 —— 用它，别新增暴露面。
+ */
+function approachScore(distance) {
+  const s = mkScene(undefined, distance)
+  const r = C.chooseIntent(s.minds.kylinzi, s.minds.xisha, () => 0.5)
+  const hit = Array.from(r.all).find((c) => c.intent === 'approach')
+  assert.ok(hit, 'approach 必须在候选表里')
+  return hit.score
+}
+
+test('Task4c·1 没有剧本的意图不开合演：approach 只走过去，不 open', () => {
+  // 距离 340 才让 approach 赢：Step 2 之后它**只在远处**赢，那正是修正的目的
+  // （贴近时「想过去」本身没有意义）。贴近场景里 approach 不会被选中 —— 观测不到这道门。
+  const s = mkScene(undefined, 340)
+  const evs = s.d.step(1 / 60)
+  const mine = evs.find((e) => e.type === 'intent' && e.pet === 'kylinzi')
+  assert.ok(mine, '这一拍必须有意图事件')
+  assert.equal(mine.intent, 'approach', '前置：本拍 approach 必须真的赢，否则断言空转')
+  assert.equal(s.d.duet, null, 'approach 在 SCRIPTS 里没有剧本，绝不许 open 一场不存在的合演')
+  assert.ok(!evs.some((e) => e.type === 'open'), '不许有 open 事件')
+  assert.equal(s.A.clip, 'walk', 'approach 应当走起来')
+  assert.equal(canon(s.A.target), canon({ x: s.B.x, y: s.B.y }), 'approach 应当朝对方设 target')
+})
+
+test('Task4c·2 不再有 no-phase 空转：近距与远距两种自然游程都是零', () => {
+  // 两个距离都要观测：
+  //  - 60（贴近）：修正前 approach 用固定 +0.5 赢过 idle(0.4) ⇒ 每两拍一条 abort(no-phase)；
+  //  - 340（拉远）：Step 2 之后 approach 只在这类距离赢。贴近场景里那道门根本不会被走到，
+  //    所以「删掉门会不会红」只能在远距观测口上验（近距会因 approach 不再被选中而假绿）。
+  for (const gap of [60, 340]) {
+    const s = mkScene(undefined, gap)
+    let opens = 0
+    let approaches = 0
+    for (let i = 0; i < 2000; i++) {
+      for (const e of s.d.step(1 / 60)) {
+        if (e.type === 'open') opens++
+        if (e.type === 'intent' && e.intent === 'approach') approaches++
+      }
+    }
+    const spins = s.d.memories.filter((m) => m.aborted === 'no-phase')
+    assert.equal(spins.length, 0,
+      'gap=' + gap + '：出现 ' + spins.length + ' 条 abort(no-phase) 空转，前 3 条 = ' + JSON.stringify(spins.slice(0, 3)))
+    assert.equal(opens, 0, 'gap=' + gap + '：没有剧本的意图不许 open（实际 ' + opens + ' 次）')
+    if (gap === 340) {
+      assert.ok(approaches > 0, 'gap=340 时 approach 必须真的被选中过，否则这条断言是空转的（实际 ' + approaches + ' 次）')
+    }
+  }
+})
+
+test('Task4c·3 approach 的打分与距离同向：从公开出口观测，不直接调 socialScore', () => {
+  // 计划 2026-10-11 改：socialScore **不在 __kylinContract 里**，跨 realm 够不到。
+  // 改成观测导演真正消费的那个出口（chooseIntent 的返回），比比数值更强。
+  const far = mkScene(undefined, 360)
+  const farPick = C.chooseIntent(far.minds.kylinzi, far.minds.xisha, () => 0.5)
+  const near = mkScene(undefined, 60)
+  const nearPick = C.chooseIntent(near.minds.kylinzi, near.minds.xisha, () => 0.5)
+  const at0 = approachScore(0)
+  const at100 = approachScore(100)
+  const at360 = approachScore(360)
+  console.log('[phase.test] approach 分数 0/100/360 = ' + [at0, at100, at360].join(' / ') +
+    '；距 360 选中=' + farPick.intent + '，距 60 选中=' + nearPick.intent)
+  assert.equal(farPick.intent, 'approach', '距离 = SOCIAL_RADIUS 时「过去」应当胜出；实际 = ' + farPick.intent)
+  assert.notEqual(nearPick.intent, 'approach', '就在身边就不该还想「过去」；实际 = ' + nearPick.intent)
+})
+
+test('Task4c·4 贴近 + aff=20：赢下来的必须是有剧本的意图', () => {
+  const s = mkScene({ affinity: 20, familiarity: 0 }, 100)
+  const r = C.chooseIntent(s.minds.kylinzi, s.minds.xisha, () => 0.5)
+  const kinds = Object.keys(C.SCRIPTS)
+  const live = Array.from(r.all).filter((c) => c.family === 'social' && c.gate === null).map((c) => c.intent + '=' + c.score)
+  console.log('[phase.test] aff=20 dist=100 选中=' + r.intent + '；放行的社交候选：' + live.join(', '))
+  assert.ok(kinds.indexOf(r.intent) >= 0,
+    '赢的必须是有剧本的意图（修正前会回 approach）；实际 = ' + r.intent + '，SCRIPTS = ' + JSON.stringify(kinds))
+})
+
+test('Task4c·5 端到端：aff=30 自然跑 3000 拍，至少一次正常收尾且 kind 是剧本之一', () => {
+  const s = mkScene({ affinity: 30, familiarity: 0 })
+  for (let i = 0; i < 3000; i++) s.d.step(1 / 60)
+  const good = s.d.memories.filter((m) => m.aborted === undefined)
+  const spins = s.d.memories.filter((m) => m.aborted === 'no-phase')
+  const seen = []
+  for (const m of good) if (seen.indexOf(m.kind) < 0) seen.push(m.kind)
+  console.log('[phase.test] aff=30 跑 3000 拍：正常收尾 ' + good.length + ' 次，no-phase 空转 ' + spins.length + ' 次，走通的剧本 = ' + JSON.stringify(seen))
+  assert.ok(good.length >= 1, '至少要有一次正常收尾；实际 memories = ' + JSON.stringify(s.d.memories.slice(0, 3)))
+  const kinds = Object.keys(C.SCRIPTS)
+  for (const m of good) assert.ok(kinds.indexOf(m.kind) >= 0, '正常收尾的 kind 必须是 8 个剧本之一：' + m.kind)
+  // 以下两条是计划原文之外补的（原文只用「至少一次正常收尾」判绿，而**修正前它也绿** ——
+  // aff=30 时 shoulder(0.6+0.6−0.067=1.133) 本来就压过 approach(0.6+0.5−0.067=1.033)，
+  // 于是 pre-fix 会在 shoulder 结算后掉进 approach 空转，但「至少一次」已被 shoulder 满足。
+  // 补这两条才有判别力：空转必须为 0、且不止一个剧本真的走通（原文的论点是「8 个里 7 个不可达」）。
+  assert.equal(spins.length, 0, '端到端游程里不许有 no-phase 空转（实际 ' + spins.length + ' 次）')
+  assert.ok(seen.length >= 2, '至少要有两个不同剧本真的走通（修正前只有 shoulder）；实际 = ' + JSON.stringify(seen))
+})
+
