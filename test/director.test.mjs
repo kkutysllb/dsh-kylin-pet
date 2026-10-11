@@ -61,7 +61,7 @@ function mkScene() {
   const stuck = []
   const director = C.createDirector({
     world: world, minds: minds, model: model, rng: () => 0.5,
-    onStimulus: (evs) => { stuck.push(evs) },
+    onStimulus: (ev) => { stuck.push(ev) },   // 单对象，不是数组
   })
   return { A: A, B: B, world: world, minds: minds, model: model, stuck: stuck, d: director }
 }
@@ -118,12 +118,12 @@ test('settle：账本写入经由注入的 onStimulus（导演不自己发请求
   assert.equal(s.stuck.length, 0)
   s.d.settle('gift', s.A, s.B, 'gift', 7)
   assert.equal(s.stuck.length, 1, '必须恰好调一次')
-  assert.equal(s.stuck[0].length, 1)
-  assert.equal(s.stuck[0][0].pair, 'kylinzi|xisha')
-  assert.equal(s.stuck[0][0].kind, 'gift')
-  assert.equal(s.stuck[0][0].affinityDelta, 3)
-  assert.equal(s.stuck[0][0].familiarityDelta, 1)
-  assert.equal(s.stuck[0][0].at, 7)
+  assert.ok(!Array.isArray(s.stuck[0]), 'onStimulus 必须收到**单个事件对象**，不是数组')
+  assert.equal(s.stuck[0].pair, 'kylinzi|xisha')
+  assert.equal(s.stuck[0].kind, 'gift')
+  assert.equal(s.stuck[0].affinityDelta, 3)
+  assert.equal(s.stuck[0].familiarityDelta, 1)
+  assert.equal(s.stuck[0].at, 7)
 })
 
 test('abort：拎走路径写记忆、清掉全部 busy、释放动作槽', () => {

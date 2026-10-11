@@ -49,7 +49,11 @@ window.__ModuleLoader__.load({
     const TUNING = Object.freeze({
       TICK_SEC: 1,                 // 与 /state 轮询对齐（spec §5：每拍约 1s）
       SOCIAL_RADIUS: 360,          // px：超出这个距离的社交候选改判为 approach 或淘汰
-      NEAR_RADIUS: 150,            // px：算「已经在旁边」
+      NEAR_RADIUS: 300,            // px：算「已经在旁边」。
+      // **必须大于 separate() 强制的最小间距**（两只 280 宽的宠 → (280+280)*0.28 = 156.8）。
+      // 原来的 150 比它还小 ⇒ near / veryNear 都是**恒假式** ⇒ approach 阶段永远不结束
+      // ⇒ 6s 撞超时 abort ⇒ abort 不上冷却 ⇒ 立刻重开同一场，无限循环。
+      // 2026-10-11 由 Task 6 真机取证发现（单测发现不了：两个常量分属两个子系统）。
       ENERGY_DRAIN: 0.012,         // 每拍衰减
       ENERGY_RECOVER: 0.02,        // 每拍恢复（sleep 时）
       MOOD_REGRESS: 0.01,          // 每拍向 0 回归（spec §4.5：缓慢回归）
@@ -635,7 +639,11 @@ window.__ModuleLoader__.load({
         for (const a of [actorA, actorB]) if (a) a.busy = false
         memories.push({ kind: kind, at: at, affinity: eff.affinity })
         if (memories.length > 50) memories.shift()
-        stick([ev])                     // ← V3 的 queueBondEvent：防抖 + PUT /bond，**不在这里**
+        // ⚠️ 必须传**单个事件对象**：V3 的 queueBondEvent(ev) 逐个读 ev.pair / ev.kind /
+        // ev.affinityDelta。传数组（原写法 stick([ev])）会让这些字段全是 undefined ⇒
+        // 落盘成 {kind:"unknown", affinityDelta:0} ⇒ **互动永不改变关系**。
+        // 2026-10-11 由 Task 6 真机取证发现（单测发现不了：测试替身的形状是从这个调用点抄的）。
+        stick(ev)                       // V3 的 queueBondEvent：防抖 + PUT /bond，**不在这里**
         return ev
       }
 
@@ -675,8 +683,10 @@ window.__ModuleLoader__.load({
           if (line && actorA) actorA.say(typeof line === 'string' ? line : (line[actorA.pet.id] || line[actorB.pet.id] || ''))
         }
         if (spec.move === 'toward' && actorA && actorB) {
-          const gap = ASSET.W * 0.28
-          actorA.target = { x: actorB.x + (actorA.x <= actorB.x ? gap : -gap), y: actorB.y }
+          // 不自己算间距：原来用 ASSET.W*0.28（素材原生宽 640 → 179.2），而 separate() 用的是
+          // 演员渲染宽 280（→ 156.8）。两个「0.28 的宽」不是同一个宽 ⇒ 终点与下限只差 22px。
+          // 直接以对方为目标，**能走多近由 separate() 决定**（它是唯一的裁决点）。
+          actorA.target = { x: actorB.x, y: actorB.y }
         }
       }
 
@@ -1128,6 +1138,14 @@ window.__ModuleLoader__.load({
         rng: Math.random,
         onStimulus: queueBondEvent,       // ← V3 的防抖写入口；导演**不自己发请求**
       })
+      /* Task 6 取证探针：只读快照，不暴露任何可变引用（memories 在 director 的 getter 里已拷一份）。 */
+      probe = () => ({
+        duet: director.duet ? { kind: director.duet.kind, phase: director.duet.phase, at: director.duet.at } : null,
+        memories: director.memories.slice(-20),
+        moods: Object.fromEntries(Object.keys(minds).map((id) => [id, {
+          mood: minds[id].mood, energy: minds[id].energy, cooldown: Object.keys(minds[id].cooldown),
+        }])),
+      })
       // ⚠️ 计划插入地图写的是「createWorld 的下一行」，此处逐字照此放置：导演在创建时就拷贝
       // `world.pairKey`（createDirector 内 `const pairKey = world.pairKey`），而这一行还没赋 ——
       // 于是导演的 pairKey 是 undefined，settle 事件带的 pair 靠 queueBondEvent 的
@@ -1189,6 +1207,10 @@ window.__ModuleLoader__.load({
 
     // 契约在工厂体**末尾**冻结：函数声明在装载期就提升到位，所有 const 表（含 §3.9 的 SCRIPTS / ADVANCE / LINES）
     // 到这里也已初始化；状态（bondState）是 let，函数体读的是**调用时**的值 —— readBond() 因此是实时快照。
+    /** 取证探针：由 start() 回填。契约在**装载期**就冻结了（start() 还没跑），
+     * 所以它只能通过这个晚绑定引用间接读到运行期状态 —— 直接写在契约里会 ReferenceError。 */
+    let probe = null
+
     exports.__kylinContract = Object.freeze({
       ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, BOND, BALANCE_TIERS, ANIM_EXT, qualified,
       INTENTS, TUNING,
@@ -1199,6 +1221,8 @@ window.__ModuleLoader__.load({
       // 内，跨 realm 单测够不到，而 Step 5 第 1 条要求「play 未被同步调用」有观测口。详见 §3.6 注释。
       deliverStimulus,
       createDirector, SCRIPTS, ADVANCE, LINES,
+      // 只读取证出口（Task 6）：start() 完成前回 null，不回抛。
+      directorState: () => (probe ? probe() : null),
     })
 
     exports.apply = () => {

@@ -71,7 +71,8 @@ export const INTENTS = Object.freeze({
 export const TUNING = Object.freeze({
   TICK_SEC: 1,                 // 与 /state 轮询对齐（spec §5：每拍约 1s）
   SOCIAL_RADIUS: 360,          // px：超出这个距离的社交候选改判为 approach 或淘汰
-  NEAR_RADIUS: 150,            // px：算「已经在旁边」
+  NEAR_RADIUS: 300,            // px：算「已经在旁边」。**必须大于 separate() 的下限 156.8**
+                               // （(280+280)*0.28），否则 near/veryNear 恒假、approach 永不结束。见 client.js 同名字段。
   ENERGY_DRAIN: 0.012,         // 每拍衰减
   ENERGY_RECOVER: 0.02,        // 每拍恢复（sleep 时）
   MOOD_REGRESS: 0.01,          // 每拍向 0 回归（spec §4.5：缓慢回归）

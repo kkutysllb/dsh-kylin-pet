@@ -74,7 +74,7 @@ function mkScene(bond, gap) {
   const stuck = []
   const d = C.createDirector({
     world: world, minds: minds, model: model, rng: () => 0.5,
-    onStimulus: (evs) => { stuck.push(evs) },
+    onStimulus: (ev) => { stuck.push(ev) },   // 单对象，不是数组
   })
   return { A: A, B: B, world: world, minds: minds, model: model, stuck: stuck, d: d }
 }
@@ -141,9 +141,9 @@ test('settle 恰好一次：stick 收到 1 条事件，memories 恰好 +1', () =
   s.d.open(s.A, s.B, 'greet', 0)
   drive(s.d, 1000)
   assert.equal(s.stuck.length, 1, '账本写入必须恰好一次')
-  assert.equal(s.stuck[0].length, 1)
-  assert.equal(s.stuck[0][0].kind, 'greet')
-  assert.equal(s.stuck[0][0].affinityDelta, C.TUNING.EFFECT.greet.affinity)
+  assert.ok(!Array.isArray(s.stuck[0]), 'onStimulus 必须收到**单个事件对象**，不是数组')
+  assert.equal(s.stuck[0].kind, 'greet')
+  assert.equal(s.stuck[0].affinityDelta, C.TUNING.EFFECT.greet.affinity)
   assert.equal(s.d.memories.length, before + 1)
   assert.equal(s.d.memories[0].aborted, undefined, '正常收尾不该带 aborted')
 })
@@ -202,16 +202,16 @@ test('gift 的两条 effect 由关系选：affinity ≥ 0 走 gift，< 0 走 gif
   pos.d.open(pos.A, pos.B, 'gift', 0)
   drive(pos.d, 1000)
   assert.equal(pos.stuck.length, 1)
-  assert.equal(pos.stuck[0][0].kind, 'gift')
-  assert.equal(pos.stuck[0][0].affinityDelta, C.TUNING.EFFECT.gift.affinity)
+  assert.equal(pos.stuck[0].kind, 'gift')
+  assert.equal(pos.stuck[0].affinityDelta, C.TUNING.EFFECT.gift.affinity)
   assert.equal(pos.model.bond.affinity, C.TUNING.EFFECT.gift.affinity)
 
   const neg = mkScene({ affinity: -5, familiarity: 0 })
   neg.d.open(neg.A, neg.B, 'gift', 0)
   drive(neg.d, 1000)
   assert.equal(neg.stuck.length, 1)
-  assert.equal(neg.stuck[0][0].kind, 'gift', 'kind 记的仍是剧本名，不是 effect 名')
-  assert.equal(neg.stuck[0][0].affinityDelta, C.TUNING.EFFECT.giftIgnored.affinity)
+  assert.equal(neg.stuck[0].kind, 'gift', 'kind 记的仍是剧本名，不是 effect 名')
+  assert.equal(neg.stuck[0].affinityDelta, C.TUNING.EFFECT.giftIgnored.affinity)
   assert.equal(neg.model.bond.affinity, -5 + C.TUNING.EFFECT.giftIgnored.affinity)
 })
 
@@ -346,5 +346,16 @@ test('Task4c·5 端到端：aff=30 自然跑 3000 拍，至少一次正常收尾
   // 补这两条才有判别力：空转必须为 0、且不止一个剧本真的走通（原文的论点是「8 个里 7 个不可达」）。
   assert.equal(spins.length, 0, '端到端游程里不许有 no-phase 空转（实际 ' + spins.length + ' 次）')
   assert.ok(seen.length >= 2, '至少要有两个不同剧本真的走通（修正前只有 shoulder）；实际 = ' + JSON.stringify(seen))
+})
+
+test('数值不变式：near / veryNear 的门槛必须大于世界强制的最小间距', () => {
+  const C = loadContract()
+  const boxW = 280                                   // 演员渲染宽（pet.size 默认值）
+  const minGap = (boxW + boxW) * 0.28                // separate() 的公式
+  assert.ok(C.TUNING.NEAR_RADIUS > minGap,
+    'NEAR_RADIUS(' + C.TUNING.NEAR_RADIUS + ') 必须 > minGap(' + minGap + ')，否则 near 恒假')
+  assert.ok(C.TUNING.NEAR_RADIUS * 0.6 > minGap,
+    'veryNear(' + C.TUNING.NEAR_RADIUS * 0.6 + ') 必须 > minGap(' + minGap + ')，否则 veryNear 恒假')
+  assert.ok(C.TUNING.NEAR_RADIUS < C.TUNING.SOCIAL_RADIUS, 'near 必须比 too-far 更近')
 })
 

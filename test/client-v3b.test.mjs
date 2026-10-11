@@ -80,7 +80,7 @@ function mkScene(bond) {
   const stuck = []
   const d = C.createDirector({
     world: world, minds: minds, model: model, rng: () => 0.5,
-    onStimulus: (evs) => { stuck.push(evs) },
+    onStimulus: (ev) => { stuck.push(ev) },   // 单对象，不是数组
   })
   return { A: A, B: B, world: world, minds: minds, model: model, stuck: stuck, d: d }
 }
@@ -179,8 +179,8 @@ test('settle：账本写入只经由注入的 onStimulus（导演不自己发请
   s.d.open(s.A, s.B, 'greet', 0)
   s.d.settle('greet', s.A, s.B, 'greet', 5)
   assert.equal(s.stuck.length, 1, '必须恰好调一次')
-  assert.equal(s.stuck[0].length, 1)
-  const ev = s.stuck[0][0]
+  assert.ok(!Array.isArray(s.stuck[0]), 'onStimulus 必须收到**单个事件对象**，不是数组')
+  const ev = s.stuck[0]
   assert.equal(ev.pair, s.world.pairKey, '参数里必须有 pair')
   assert.equal(ev.kind, 'greet')
   assert.equal(ev.affinityDelta, 2)
