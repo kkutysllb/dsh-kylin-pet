@@ -545,6 +545,167 @@ Run: `npm test` → Expected: **117 pass / 0 fail**（106 + 11）。原写「114
 
 ---
 
+## Task 4b: **阶段执行器**（补 Task 3/4 缺掉的一整块 —— **没有它，V3b 跑不起来**）
+
+**Files:** Modify `src/stage/client.js`；Create `test/phase.test.mjs`
+
+### 为什么有这一节
+
+Task 3 的 `step()` 里写的是 `if (duet.advance) { ...兜底推进... }`，而**全仓没有任何地方给 `duet.advance` 赋值** —— Task 3 注释①说「本 Task 只给骨架」，Task 4 Step 2 说「补 Task 3 的骨架」，但 Step 2 只给了 `ADVANCE` 谓词表。后果：
+
+- 该分支**永远为假** ⇒ 阶段永不推进 ⇒ 撞 `PHASE_TIMEOUT_SEC.approach` 被 `abort('timeout')`；
+- `settle()` **一次都不会被调用** ⇒ 账本永不增长、冷却永远是空的 ⇒ **Task 6 的三条验收句全部无法达成**。
+
+> **执行期实测证据**（只读探针，`open` 后连续 `step` 8 秒）：出现过的阶段集合 = `["approach"]`；t≈6.1s 撞 deadline 被 `abort('timeout')`；`memories = [{kind:"greet", aborted:"timeout"}]`。
+
+### Step 1: `ADVANCE` 的时间谓词读错了对象
+
+`turned / once / immediate / hold3s / hold4s / arrived` 读的是 `w.sincePhase`，而 `world` **没有** `sincePhase`（只有 `near/veryNear` 真的要用世界算距离）。改成读合演自己的 `d.sincePhase`：
+
+```js
+const ADVANCE = {
+  near:      (d, w) => dist(d, w) <= TUNING.NEAR_RADIUS,
+  veryNear:  (d, w) => dist(d, w) <= TUNING.NEAR_RADIUS * 0.6,
+  turned:    (d) => d.sincePhase >= 0.4,
+  once:      (d) => d.sincePhase >= 0.6,
+  immediate: (d) => d.sincePhase >= 0.2,
+  hold3s:    (d) => d.sincePhase >= 3.0,
+  hold4s:    (d) => d.sincePhase >= 4.0,
+  arrived:   (d) => d.sincePhase >= 1.5,
+}
+```
+
+> `d` = 合演，`w` = 世界，**两个形参各有各的用处**。原文把时间判据也写成 `w.sincePhase`，才让人没注意到 `sincePhase` 在整个仓里根本不存在。
+
+### Step 2: `open()` 给合演补上 `sincePhase`
+
+```js
+duet = {
+  kind, initiator: initiatorActor.pet.id, responder: responderActor.pet.id,
+  phase: 'approach',
+  sincePhase: 0,
+  deadline: TUNING.PHASE_TIMEOUT_SEC.approach,
+  outcome: null, at,
+}
+```
+
+### Step 3: 阶段执行器本体
+
+```js
+/** 按 id 找演员；找不到回 null（不抛）。 */
+function actorById(id) { return world.actors.find((a) => a.pet.id === id) || null }
+
+/** 本阶段的声明；剧本或阶段缺失回 null。 */
+function phaseSpec(kind, phase) {
+  const s = SCRIPTS[kind]
+  return s && s.phases ? (s.phases[phase] || null) : null
+}
+
+/** 进入新阶段的一次性动作：播片 / 设朝向 / 放台词 / 起步。只在 sincePhase === 0 那一拍做。 */
+function enterPhase(spec, actorA, actorB) {
+  if (spec.clip) {
+    if (actorA) actorA.play(spec.clip)
+    if (actorB && spec.clip === 'happy') actorB.play(spec.clip)
+  }
+  if (spec.facing === 'toward' && actorA && actorB) actorA.setFacing(actorB.x < actorA.x ? -1 : 1)
+  if (spec.say) {
+    const line = LINES[spec.say]
+    if (line && actorA) actorA.say(typeof line === 'string' ? line : (line[actorA.pet.id] || line[actorB.pet.id] || ''))
+  }
+  if (spec.move === 'toward' && actorA && actorB) {
+    const gap = ASSET.W * 0.28
+    actorA.target = { x: actorB.x + (actorA.x <= actorB.x ? gap : -gap), y: actorB.y }
+  }
+}
+
+/** 推进一拍。返回 'settled' / 'aborted' / null（仍在演）。 */
+function runDuet(dt) {
+  const actorA = actorById(duet.initiator)
+  const actorB = actorById(duet.responder)
+  const spec = phaseSpec(duet.kind, duet.phase)
+  if (!spec) { abort('no-phase'); return 'aborted' }
+  if (duet.sincePhase === 0) enterPhase(spec, actorA, actorB)
+  duet.sincePhase += dt
+  const done = spec.until && ADVANCE[spec.until] ? ADVANCE[spec.until](duet, world) : true
+  if (!done) return null
+  const i = PHASES.indexOf(duet.phase)
+  if (i < PHASES.length - 1) {
+    duet.phase = PHASES[i + 1]
+    duet.sincePhase = 0
+    duet.deadline = TUNING.PHASE_TIMEOUT_SEC[duet.phase]
+    return null
+  }
+  const script = SCRIPTS[duet.kind]
+  const eff = Array.isArray(script.effect)
+    ? (bondOf().affinity >= 0 ? script.effect[0] : script.effect[1])
+    : script.effect
+  settle(duet.kind, actorA, actorB, eff, clock)
+  duet = null
+  return 'settled'
+}
+```
+
+> **duet = null 不能省。** `settle()` 的实现里**从头到尾没有碰过 `duet`**（`abort` 清了，`settle` 没清 —— 计划的一处不对称）。不清的后果是**动作槽被永久占用**，之后 `open()` 的 `if (duet) return null` 恒成立 ⇒ **整局只可能发生一场合演**。
+> 必须有一条测试盯它：**结算之后 `duet` 为 null，且能再开一场**。
+
+### Step 4: `step()` 的合演分支接上执行器 + 修 D3
+
+```js
+if (duet) {
+  // D3 修正：必须先筛「被拎起的」，再判断它是不是本场两只之一。
+  // 原文 find((a) => a.pet.id === duet.responder || a.pet.id === duet.initiator)
+  // 返回的是数组里第一个匹配任一 id 的 actor —— 实际只检查了一只，
+  // 拎起另一只不会中断（执行期实测：拎 responder → events=[]，duet 仍在）。
+  const held = world.actors.find((a) => a.held && (a.pet.id === duet.responder || a.pet.id === duet.initiator))
+  if (held) { events.push({ type: 'abort', detail: abort('partner-held') }); return events }
+  duet.deadline -= dt
+  if (duet.deadline <= 0) { events.push({ type: 'abort', detail: abort('timeout') }); return events }
+  const r = runDuet(dt)
+  if (r) events.push({ type: r === 'settled' ? 'settle' : 'abort', detail: r })
+  return events
+}
+```
+
+### Step 5: 心智必须带上位置（**否则永远开不了合演**）
+
+`chooseIntent` 用 `mind` 的位置算距离，而 `createMind()` 只有 `mood/energy/attention/recent/cooldown/bond` —— **没有 `x/y`**。于是 `dist` 恒为 `NaN` ⇒ 所有社交候选 `score` 为 `NaN` ⇒ 永不入选 ⇒ 两只永远 `intent:"idle"`。
+
+> **执行期实测**：只给 `m.x/m.y` 补上（镜像 actor 位置）后，同一场景立刻变成 `intent:"shoulder", family:"social"` 并成功 `open`。
+
+所以 Task 5 Step 1 的建心智循环要加上位置，并在每拍同步：
+
+```js
+for (const a of world.actors) {
+  const m = createMind(a.pet.id)
+  m.bond = bondFor(a.pet.id)
+  m.x = a.x; m.y = a.y            // chooseIntent 靠它算距离；缺了就 NaN
+  minds[a.pet.id] = m
+}
+// 主循环里 world.step 之后同步
+for (const a of world.actors) { const m = minds[a.pet.id]; if (m) { m.x = a.x; m.y = a.y } }
+```
+
+### Step 6: 测试 `test/phase.test.mjs`
+
+1. **四阶段真的走完**：注入「两只相邻、冷却为空、关系够解锁」的场景，逐拍 `step(1/60)` 直到 `duet` 为 null，断言**观察到的阶段序列 = `['approach','open','exchange','settle']`**（顺序与完整性都要，不能只有首尾）；
+2. **`settle` 恰好一次**：`stick` 恰好收到 1 条事件；`memories` 恰好 +1；
+3. **`duet` 清空且槽位可复用**：结算后 `open()` 能再成功一次；
+4. **`busy` 两条路都清**：`settle` 后两只 `busy === false`；`abort` 后同样；
+5. **D3 修正承重**：分别拎起 initiator 与 responder，**两次都要 abort**（修正前会红一半）；
+6. **`gift` 的两条 effect 由关系选**：affinity ≥ 0 走 `gift`、< 0 走 `giftIgnored`，断言账本增量分别等于表里的值；
+7. **超时兜底仍在**：把某阶段谓词改成永不满足，断言在 `PHASE_TIMEOUT_SEC` 后 `abort('timeout')`（不是永久卡死）；
+8. **`phaseSpec` 缺阶段时不抛**：剧本存在但阶段缺失 ⇒ `abort('no-phase')`。
+
+Run: `npm test` → Expected: **125 pass / 0 fail**（117 + 8）。**负对照**：删掉 `runDuet` 里那句 `duet = null` ⇒ 测试 3 必须红。
+
+### 裁决记录（回子代理的三个问题）
+
+1. **`settle` 是否清 `duet`** —— **必须清**，但**清在执行器里**（`runDuet`）而不是 `settle` 里：`settle` 的签名收的是显式 actor 与 effect 名，它跟「当前有没有一场合演」是解耦的；把槽位释放放在「谁推进了阶段」那里，职责更清楚。**并且必须有一条测试盯住「结算后能再开一场」** —— 那是「整局只发生一场」这个 bug 的唯一防线。
+2. **`LINES` 进 `__kylinContract`** —— **接受**。Task 4 的 `say ⟷ LINES` 双向对账需要跨 realm 读取口；Task 5 Step 5 的清单漏了它，是清单的疏漏。
+3. **D3/D4/D5 是否另起一片** —— **D4 就是本节**（阶段执行器整块缺失，不是补丁）；**D3 在 Step 4、D5 在 Step 5**，都并进本片。**不另起小片**：它们三个的共同效果是「让合演真的跑起来」，拆成三片只会让每一片都跑不到绿。
+
+---
+
 ## Task 5: 接回主循环（`src/stage/client.js`）
 
 **Files:** Modify `src/stage/client.js`、`test/client-contract.test.mjs`；Create `test/client-v3b.test.mjs`
