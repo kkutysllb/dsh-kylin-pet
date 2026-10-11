@@ -7,6 +7,11 @@ import { loadPetConfig } from '../src/server/pet-config.js'
 import { createAssetResolver } from '../src/server/static-assets.js'
 import { createBoard } from '../src/server/state.js'
 import { installStimuli } from '../src/server/stimuli.js'
+import { createBondStore } from '../src/server/bond.js'
+import { unavailable } from '../src/server/ledger.js'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 function boot() {
   // 两处都钉同一个不存在的 home：**只有包内素材**，测试才是密闭的。
@@ -185,4 +190,213 @@ test('/state 的方法与未知路径：POST 405、未知兄弟路径 404', asyn
     assert.equal((await fetch(app.base + ROUTE_PREFIX + '/state', { method: 'POST' })).status, 405)
     assert.equal((await fetch(app.base + ROUTE_PREFIX + '/state/extra')).status, 404)
   } finally { await app.close() }
+})
+
+// ---------------------------------------------------------------------------
+// V3：/bond（GET+PUT）与 /balance。上面 V1/V2 的断言一字未改，这里只追加。
+// ---------------------------------------------------------------------------
+
+/** 与 boot() 同一套装配，外加 V3 的可注入面（bond / readBalanceImpl）。 */
+async function bootWith(extra) {
+  const home = '/nonexistent-home-for-test'
+  const config = loadPetConfig({ home })
+  const handler = createHandler({ config, resolveAsset: createAssetResolver({ config, home }), ...extra })
+  const server = createServer(handler)
+  return new Promise((ok) => server.listen(0, '127.0.0.1', () => ok({
+    server,
+    base: 'http://127.0.0.1:' + server.address().port,
+    close: () => new Promise((done) => server.close(done)),
+  })))
+}
+
+/** 一次性临时目录：用来证明「真账本有没有被碰」。 */
+function tmpDir() {
+  const dir = mkdtempSync(join(tmpdir(), 'kylin-bond-'))
+  return { dir: dir, path: join(dir, 'bond.json'), ledgerPath: join(dir, 'dsh-kylin-pet', 'bond.json') }
+}
+
+/** 换一个 DSH_HOME 跑（apply 按 dshHome() 建账本句柄，测试必须隔离它）。 */
+async function withHome(home, fn) {
+  const saved = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  try { return await fn() } finally {
+    if (saved === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = saved
+  }
+}
+
+test('/bond 缺省 handler：GET 回空账、PUT 回 501，且不在 DSH_HOME 建真账本', async () => {
+  const t = tmpDir()
+  try {
+    await withHome(t.dir, async () => {
+      const app = await boot()
+      try {
+        const url = app.base + ROUTE_PREFIX + '/bond'
+        const got = await fetch(url)
+        assert.equal(got.status, 200)
+        assert.deepEqual(await got.json(), { version: 1, pairs: {} })
+        const put = await fetch(url, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ events: [{ pair: 'kylinzi|xisha', kind: 'bump', affinityDelta: 2, familiarityDelta: 1 }] }),
+        })
+        assert.equal(put.status, 501, '缺省 handler 不该偷偷接上账本')
+        assert.deepEqual(await put.json(), { error: 'bond-store-not-attached' })
+        // 只看状态码不够：真账本文件（含目录）必须一个都没被创建
+        assert.equal(existsSync(t.ledgerPath), false, '缺省 handler 不该写 DSH_HOME 下的真账本')
+        assert.deepEqual(readdirSync(t.dir), [], 'DSH_HOME 下不该出现任何东西')
+      } finally { await app.close() }
+    })
+  } finally { rmSync(t.dir, { recursive: true, force: true }) }
+})
+
+test('注入账本：PUT /bond 施加一笔、原子落盘，GET 读回同一笔', async () => {
+  const t = tmpDir()
+  const bond = createBondStore({ path: t.path, now: () => 1000 })
+  const app = await bootWith({ bond })
+  try {
+    const url = app.base + ROUTE_PREFIX + '/bond'
+    assert.deepEqual(await (await fetch(url)).json(), { version: 1, pairs: {} })
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ events: [{ pair: 'kylinzi|xisha', kind: 'bump', affinityDelta: 2, familiarityDelta: 1 }] }),
+    })
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.pairs['kylinzi|xisha'].affinity, 2)
+    assert.equal(body.pairs['kylinzi|xisha'].familiarity, 1)
+    assert.equal(body.pairs['kylinzi|xisha'].lastAt, 1000)
+    assert.equal(body.pairs['kylinzi|xisha'].history.length, 1)
+    // 落盘证明：另起一个 store 从同一路径读回（不是同一个内存对象）
+    assert.equal(createBondStore({ path: t.path }).snapshot().pairs['kylinzi|xisha'].affinity, 2)
+    // 再 GET 一次仍是 2
+    const again = await (await fetch(url)).json()
+    assert.equal(again.pairs['kylinzi|xisha'].affinity, 2)
+    assert.equal(again.pairs['kylinzi|xisha'].familiarity, 1)
+    // events 空数组合法（防抖后可能无事可报）：照回当前账
+    const empty = await fetch(url, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ events: [] }),
+    })
+    assert.equal(empty.status, 200)
+    assert.equal((await empty.json()).pairs['kylinzi|xisha'].affinity, 2)
+  } finally { await app.close(); rmSync(t.dir, { recursive: true, force: true }) }
+})
+
+test('PUT /bond：body 非 JSON -> 400，账本一字未动', async () => {
+  const t = tmpDir()
+  const bond = createBondStore({ path: t.path })
+  const app = await bootWith({ bond })
+  try {
+    const res = await fetch(app.base + ROUTE_PREFIX + '/bond', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: '{ 这不是 json',
+    })
+    assert.equal(res.status, 400)
+    assert.deepEqual(await res.json(), { error: 'invalid-json' })
+    assert.deepEqual(bond.snapshot(), { version: 1, pairs: {} })
+    assert.equal(existsSync(t.path), false, '解析失败不该落盘')
+  } finally { await app.close(); rmSync(t.dir, { recursive: true, force: true }) }
+})
+
+test('PUT /bond：events 不是数组 -> 400（缺字段 / 字符串 / 对象 / null 都算）', async () => {
+  const t = tmpDir()
+  const bond = createBondStore({ path: t.path })
+  const app = await bootWith({ bond })
+  try {
+    const url = app.base + ROUTE_PREFIX + '/bond'
+    for (const body of [{}, { events: 'nope' }, { events: {} }, null]) {
+      const res = await fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      assert.equal(res.status, 400, JSON.stringify(body))
+      assert.deepEqual(await res.json(), { error: 'events-not-array' })
+    }
+    assert.deepEqual(bond.snapshot(), { version: 1, pairs: {} })
+    assert.equal(existsSync(t.path), false)
+  } finally { await app.close(); rmSync(t.dir, { recursive: true, force: true }) }
+})
+
+test('PUT /bond：body 超 64KB -> 413（不截断、不落盘）', async () => {
+  const t = tmpDir()
+  const bond = createBondStore({ path: t.path })
+  const app = await bootWith({ bond })
+  try {
+    const big = JSON.stringify({ events: [{ pair: 'kylinzi|xisha', affinityDelta: 1, pad: 'x'.repeat(70 * 1024) }] })
+    assert.ok(Buffer.byteLength(big) > 64 * 1024)
+    const res = await fetch(app.base + ROUTE_PREFIX + '/bond', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: big,
+    })
+    assert.equal(res.status, 413)
+    assert.deepEqual(await res.json(), { error: 'body-too-large' })
+    assert.deepEqual(bond.snapshot(), { version: 1, pairs: {} })
+    assert.equal(existsSync(t.path), false)
+  } finally { await app.close(); rmSync(t.dir, { recursive: true, force: true }) }
+})
+
+test('GET /balance：探针说 not-configured -> 200 + unavailable，响应体里一个数字都没有', async () => {
+  const app = await bootWith({ readBalanceImpl: async () => unavailable('not-configured', 'DEEPSEEK_API_KEY', 5) })
+  try {
+    const res = await fetch(app.base + ROUTE_PREFIX + '/balance')
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.kind, 'unavailable')
+    assert.equal(body.reason, 'not-configured')
+    assert.equal(body.detail, 'DEEPSEEK_API_KEY')
+    assert.equal(body.at, 5)
+    assert.deepEqual(Object.keys(body).sort(), ['at', 'detail', 'kind', 'reason'])
+    assert.ok(!('total' in body) && !('tier' in body), '降级响应里不许凭空出现数字')
+  } finally { await app.close() }
+})
+
+test('老路径零回归：/health、POST /state 405、未知路径 404，PUT 只在 /bond 上开', async () => {
+  const app = await boot()
+  try {
+    const health = await fetch(app.base + ROUTE_PREFIX + '/health')
+    assert.equal(health.status, 200)
+    assert.deepEqual((await health.json()).cast, ['kylinzi', 'xisha'])
+    assert.equal((await fetch(app.base + ROUTE_PREFIX + '/state', { method: 'POST' })).status, 405)
+    assert.equal((await fetch(app.base + ROUTE_PREFIX + '/nope')).status, 404)
+    assert.equal((await fetch(app.base + ROUTE_PREFIX + '/state', { method: 'PUT' })).status, 405)
+    assert.equal((await fetch(app.base + ROUTE_PREFIX + '/nope', { method: 'PUT' })).status, 405)
+  } finally { await app.close() }
+})
+
+test('apply 之后 /balance 绑上 ctx 凭据：回 unavailable 而不是 500', async () => {
+  const t = tmpDir()
+  try {
+    await withHome(t.dir, async () => {
+      const registered = []
+      const ctx = {
+        on: () => () => {},
+        get: () => undefined,            // 这台 ctx 上没有 credentials 服务
+        webServer: { register: (r) => { registered.push(r); return () => {} } },
+        effect: (fn) => fn(),
+        logger: { info: () => {} },
+      }
+      apply(ctx)
+      assert.equal(registered.length, 1)
+      const app = await new Promise((ok) => {
+        const server = createServer(registered[0].handler)
+        server.listen(0, '127.0.0.1', () => ok({
+          base: 'http://127.0.0.1:' + server.address().port,
+          close: () => new Promise((done) => server.close(done)),
+        }))
+      })
+      try {
+        const res = await fetch(app.base + ROUTE_PREFIX + '/balance')
+        assert.equal(res.status, 200, '取不到余额是正常状态，不是 500')
+        const body = await res.json()
+        assert.equal(body.kind, 'unavailable')
+        assert.equal(body.reason, 'no-credentials-service')
+        // apply 同时把真账本句柄接上了（GET 可用）
+        const bond = await fetch(app.base + ROUTE_PREFIX + '/bond')
+        assert.equal(bond.status, 200)
+        assert.deepEqual(await bond.json(), { version: 1, pairs: {} })
+      } finally { await app.close() }
+    })
+  } finally { rmSync(t.dir, { recursive: true, force: true }) }
 })
