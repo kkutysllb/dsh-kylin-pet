@@ -491,6 +491,10 @@ const SCRIPTS = Object.freeze({
   },
 })
 
+> **⚠️ 命名冲突，必须先处理**：`client.js` 现在**已经有一个 `LINES`** —— 那是 V2 的诱因面文案表（`{ 'turn-ok': '稳了', 'turn-fail': '让我想想', waiting: '在呢' }`）。
+> 本 Task 引入的是**剧本**文案表。**先把既有的那张改名 `LINES_STIMULUS`**（Task 5 Step 3 引用的就是这个名字），`LINES` 让给剧本表。
+> 不改名就是同文件重复声明 —— 直接语法错误。（2026-10-11 写计划时自查发现。）
+
 /** 文案表：剧本 × 角色。**全原创**（不带任何上游措辞），V4 可顺势换表情包图。 */
 const LINES = Object.freeze({
   greet:     { kylinzi: '来啦',     xisha: '嗯' },     // 「在呢」与 waiting 撞句，已拆
