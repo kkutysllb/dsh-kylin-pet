@@ -1157,6 +1157,59 @@ Run: `npm test` → Expected: **150 pass / 0 fail**（149 + 1）。**负对照**
 
 ---
 
+## Task 5e: 给社交候选一个底分（**新装时看得见互动**）
+
+**Files:** Modify `src/stage/client.js`、`test/phase.test.mjs`
+
+### 为什么现在做（D6 的最终裁决）
+
+D6 记录过：`affinity = 0` 且贴近时，**8 个剧本的分数全在 `idle 0.4` 之下**。当时的结论是「留给 V4」。真机取证之后我改了主意：
+
+- 新装的两只宠相距约 1000px，`approach` 赢 ⇒ 它们**会走向对方**（这一段观感很好）；
+- 走近之后**什么都不做**，而且 `greet` 明明在 `UNLOCK` 里是 0 好感就解锁的。
+
+⇒ **「走过去了，然后就没有然后了」读起来像功能坏了一半**，而 `greet` 的解锁条件说它现在就该可用。**「解锁了但永远选不上」与「没解锁」没有区别** —— 这正是本仓一路在清理的那类矛盾。
+
+### 修法：能走到 `socialScore` 的候选，都是**门已经放行**的
+
+`chooseIntent` 里只对 `gate === null` 的候选调 `socialScore`（被淘汰的拿 `-Infinity`）。所以「打分的候选」＝「此刻做得到的事」——**做得到的事不该比发呆更差**。
+
+```js
+let s = 0.6 + bond.affinity * W.affinity + bond.familiarity * W.familiarity
+```
+
+取 0.6 的依据（`W.distance ≈ 0.4`、`SOCIAL_RADIUS = 360`、最近距离 ≈ minGap 156.8）：
+
+| 场景 | `greet` 的分 | `idle` | 谁赢 |
+|---|---|---|---|
+| aff=0、dist≈160（贴近） | `0.6 - 0.178 = 0.42` | 0.4 | **greet 赢**（刚好越过） |
+| aff=0、dist=1000（很远） | 被 `too-far` 淘汰，不进打分 | 0.4 | `approach` 赢 ⇒ 先走过去 |
+
+> 于是新装的第一印象变成：**两只先走向对方，走近之后真的会打招呼**。而「远的时候不隔空社交、先走过去」这条也保住了。
+
+### 测试要改一条，而且要改得**更强**
+
+Task 4c 的测试 2 断言「`gap=60` 时 `opens === 0`」—— 那是**代理指标**，本意是「没有剧本的意图不许开合演」。底分加上去之后，`gap=60` 会**合法地**开一场 `greet` ⇒ 那条断言会红，而**红得没有道理**。
+
+改成直接断言**真正的不变式**：
+
+```js
+// 每一个 open 都必须是**有剧本的**意图（approach 没有剧本，绝不许 open）
+for (const e of allEvents) {
+  if (e.type === 'open') assert.ok(C.SCRIPTS[e.detail.kind], 'open 的 kind 必须有剧本：' + e.detail.kind)
+}
+// 并且不许有 no-phase 空转（这才是「没有剧本的意图不许开合演」的可判定形式）
+assert.equal(s.d.memories.filter((m) => m.aborted === 'no-phase').length, 0)
+```
+
+**这比 `opens === 0` 强**：原来的写法在「approach 修好之后」会禁止一切社交，而新写法只禁止**非法**的社交 —— 正是当初想说的那件事。
+
+Run: `npm test` → Expected: **149 pass / 0 fail**（148 + 1；Task 5b 的 6 条已在其中）。**负对照**：把底分 0.6 改回 0 ⇒ 新增那条「新装贴近时会打招呼」的测试必须红。
+
+之后**重跑 Task 6 取证**作为最终证据。
+
+---
+
 ## Task 6: 真浏览器取证（V3b 的唯一验收）
 
 **Files:** Modify `src/stage/client.js`（只加一个只读探针）、`tools/harness.mjs`（可选）；产出 `evidence/v3b/*.png`；计划追加「V3b 取证记录」
