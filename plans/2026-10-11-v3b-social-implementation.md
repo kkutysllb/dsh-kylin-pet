@@ -248,17 +248,18 @@ function createDirector(opts) {
   const rng = opts.rng || Math.random
   const stick = opts.onStimulus || function () {}
   let duet = null                   // 当前唯一的合演
+  let clock = 0                     // **导演自己的时钟**：只由 step(dt) 推进；时间戳一律显式传参，不塞进心智状态
   const memories = []               // { at, kind, actors, outcome }
 
   const pairKey = world.pairKey
   function bondOf() { return model.bond || { affinity: 0, familiarity: 0 } }
 
   /** 优先级 = |affinity| × 意图强度 × 新鲜度（spec §6）。这里用「上次同剧本距今越久越新鲜」。 */
-  function priority(intent, self) {
+  function priority(intent, mind, at) {
     const a = Math.abs(bondOf().affinity)
-    const strength = self.energy
-    const last = (self.recent || []).filter((r) => r.kind === intent).pop()
-    const fresh = last ? clamp((self.now - last.at) / 300, 0, 1) : 1
+    const strength = mind.energy
+    const last = (mind.recent || []).filter((r) => r.kind === intent).pop()
+    const fresh = last ? clamp((at - last.at) / 300, 0, 1) : 1
     return a * strength * fresh + strength
   }
 
@@ -274,20 +275,19 @@ function createDirector(opts) {
   }
 
   /** 开一场合演。**同一时刻只允许一场**（动作槽）。 */
-  function open(initiator, responder, kind) {
+  function open(initiatorActor, responderActor, kind, at) {
     if (duet) return null
-    const now = (initiator.mind.now = initiator.mind.now || 0)
     duet = {
       kind: kind,
-      initiator: initiator.actor.pet.id,
-      responder: responder.pet.id,
+      initiator: initiatorActor.pet.id,
+      responder: responderActor.pet.id,
       phase: 'approach',
       deadline: TUNING.PHASE_TIMEOUT_SEC.approach,
       outcome: null,
-      at: now,
+      at: at,
     }
-    initiator.actor.busy = true
-    responder.busy = true
+    initiatorActor.busy = true
+    responderActor.busy = true
     return duet
   }
 
@@ -336,6 +336,7 @@ function createDirector(opts) {
 
   /** 每拍推进一次合演。返回本拍发生的事（给测试与取证观察）。 */
   function step(dt) {
+    clock += dt                      // 时钟只在这里走
     const events = []
     for (const a of world.actors) {
       const m = minds[a.pet.id]
@@ -364,10 +365,10 @@ function createDirector(opts) {
       events.push({ type: 'intent', pet: a.pet.id, intent: pick.intent, family: pick.family })
       if (pick.family !== 'social' || !other) { a.play(pick.intent === 'walk' ? 'walk' : pick.intent === 'nap' ? 'idle' : 'idle'); continue }
       // 仲裁：两只都要同一场时才成；否则按优先级，败者退回独处链
-      const mine = priority(pick.intent, Object.assign({ now: 0, energy: m.energy, recent: m.recent }, m))
-      const theirs = priority(pick.intent, Object.assign({ now: 0, energy: minds[other.pet.id].energy, recent: minds[other.pet.id].recent }, minds[other.pet.id]))
-      if (theirs > mine) { a.play('idle'); continue }
-      const created = open(a, other, pick.intent)
+      const mine = priority(pick.intent, m, clock)
+      const theirs = priority(pick.intent, minds[other.pet.id], clock)
+      if (theirs > mine) { a.play('idle'); continue }     // 败者退回独处链，不报错、不排队
+      const created = open(a, other, pick.intent, clock)
       if (created) events.push({ type: 'open', detail: created })
       return events
     }
