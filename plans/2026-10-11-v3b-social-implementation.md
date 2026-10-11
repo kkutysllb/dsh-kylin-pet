@@ -845,16 +845,36 @@ Run: `npm test` → Expected: **127 pass / 0 fail**（117 + 10）。原写「124
 
 ### Step 1: 加一个只读探针（**唯一的取证用开口**）
 
-没有它，「导演真的跑了一场合演」就只能靠截图猜。挂在 `__kylinContract.directorState()`：
+没有它，「导演真的跑了一场合演」就只能靠截图猜。挂在 `__kylinContract.directorState()`。
+
+> **⚠️ 不能把快照函数直接写在契约字面量里**（2026-10-11 预检发现）：`__kylinContract` 冻结在**工厂顶层**（`client.js:1123`），而 `director` 与 `minds` 都是 **`start()` 的局部**（`director` 在 `:1014` 之后才创建）。直接写在契约里 ⇒ **一调就 `ReferenceError`**。
+> 这与 Task 5 的 `deliverStimulus` 是**同一个作用域陷阱**，解法也一样：**契约只持有一个「晚绑定」的引用，真正的快照函数由 `start()` 回填**。
+
+**① 工厂顶层**（放在 `__kylinContract` **之前**，让它冻结时已存在）：
 
 ```js
-/** 只读快照，给取证脚本用。不暴露任何可变引用。 */
-directorState: () => ({
+/** start() 回填的取证探针；契约只能通过它间接读到运行期状态。 */
+let probe = null
+```
+
+**② 契约里**（只有一行，不解引用任何运行期变量）：
+
+```js
+directorState: () => (probe ? probe() : null),
+```
+
+**③ `start()` 里**，`director` 与 `minds` 都建好之后回填：
+
+```js
+/** 只读快照：不暴露任何可变引用（memories 已在 director 的 getter 里拷过一份）。 */
+probe = () => ({
   duet: director.duet ? { kind: director.duet.kind, phase: director.duet.phase, at: director.duet.at } : null,
   memories: director.memories.slice(-20),
   moods: Object.fromEntries(Object.keys(minds).map((id) => [id, { mood: minds[id].mood, energy: minds[id].energy, cooldown: Object.keys(minds[id].cooldown) }])),
-}),
+})
 ```
+
+> `probe()` 在 `start()` 完成前会回 `null`（**不是抛**）—— 取证脚本的第一步本来就该等到 `directorState()` 非 null 再开始断言；这也顺带给出了「舞台是否就绪」的信号。
 
 ### Step 2: 取证脚本（Playwright，Lead 亲跑；**沿用轮询等待，不用固定 sleep**）
 
