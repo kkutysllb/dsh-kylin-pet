@@ -299,3 +299,48 @@ DSH_HOME=$PWD/.probe dsh --profile web --no-open --port 0
 
 > **教训**：我原本写「必须由用户执行，因为它会杀掉会话」—— 这个判断**只对了一条路**。真正该问的是「有没有一条不需要重启的路」，而答案就写在 `dsh --help` 里（`--dump-config` + `--port 0` + `DSH_HOME`）。**「只有用户能做」这句话，应当先被当成一个待验证的假设。**
 
+
+---
+
+## Task 4 终验记录：**已装入用户的 web profile**（2026-10-11 17:00，用户指令后执行）
+
+用户指令：`「你直接装到 ~/.coder 下，我验证通过后，删除就行了」` —— 因此安装由 Lead 执行，**重启留给用户**（重启会终止 Lead 的会话）。
+
+### 装了什么
+
+| 动作 | 值 |
+|---|---|
+| 备份 | `~/.coder/profiles/web/package.json.bak-kylin-20261011-170053`（另一份在仓库 `.install-backup/`） |
+| 软链 | `node_modules/dsh-kylin-pet`：由**悬空**的 `…/dsh-kylin-pet/dsh-pet` 改为 `/Users/libing/kk_Projects/dsh-kylin-pet`（仓库根） |
+| `dependencies` | 加 `"dsh-kylin-pet": "file:/Users/libing/kk_Projects/dsh-kylin-pet"` |
+| `dsh.profile.bundles[]` | 追加 `"dsh-kylin-pet"`（原 22 项 → 23） |
+
+### 未重启即已完成的验证
+
+```
+DSH_HOME=~/.coder dsh --profile web --dump-config     →  exit=0
+1553: - id: dsh-kylin-pet
+1554:   name: dsh-kylin-pet
+1555: # == /Users/libing/.coder/profiles/web/cordis.patch.yml     ← 来自我们自己的 patch
+stderr 里与 kylin 相关的报错：无
+node_modules/dsh-kylin-pet/package.json 可读：是
+```
+
+⇒ **真加载器在用户 profile 上成功解析并挂载了本插件。**（`apply(ctx)` 真跑与 client 挂载，已在隔离探针里证过 —— 见上一节。）
+
+### 用户重启后应当看到
+
+1. 引擎日志出现 `[dsh-kylin-pet] kylinzi + xisha @ /dsh-kylin-pet-7341`；
+2. 页面出现两只宠（若没有，看 `dsh-kylin-pet` 是否 pending —— 它唯一的硬依赖是 `webServer`）；
+3. `curl <端口>/dsh-kylin-pet-7341/health` → `{"ok":true,"cast":["kylinzi","xisha"]}`；
+4. `/pet status` 可回话（回不了 ⇒ `ctx.get('commands')` 在 apply 时未就绪，走 README 的文件操作式重置即可，两条路都已交付）。
+
+### 回滚（回到「未安装」）
+
+```bash
+cp ~/.coder/profiles/web/package.json.bak-kylin-20261011-170053 ~/.coder/profiles/web/package.json
+rm -f ~/.coder/profiles/web/node_modules/dsh-kylin-pet
+# 然后重启引擎
+```
+
+> 用户已表明「验证通过后就删掉、之后从 GitHub/npm 装发布版」—— 上面这段就是那条路径。
