@@ -222,6 +222,17 @@ window.__ModuleLoader__.load({
       return { pairKey: bondState.pairKey, affinity: bondState.affinity, familiarity: bondState.familiarity }
     }
 
+    /**
+     * 取某只宠的关系快照。
+     * ⚠️ 计划 Task 5 Step 1 直接调用 `bondFor(a.pet.id)` / `bondFor('*')`，但**全仓没有这个名字**
+     * （2026-10-11 预检：src/ 与 test/ 对 bondFor 零命中）。按计划注释「V3 读回的账本快照；
+     * 读不到就是 {affinity:0, familiarity:0}」最小补上：只读 bondState，任何坏值降级成 0/0，永不抛。
+     * 当前是单对舞台（pairKey 由 cast[0]/cast[1] 定死），两只宠共用同一对账本，故 petId 暂不参与取值。
+     */
+    function bondFor(petId) {
+      return { affinity: numOf(bondState.affinity, 0), familiarity: numOf(bondState.familiarity, 0) }
+    }
+
     /** 启动读一次账本；任何失败（宿主不在 / 404 / 坏 JSON）都回 null，由 normalizeBondPair 降级成 0/0。 */
     async function loadBondPair(pairKey) {
       try {
@@ -417,6 +428,9 @@ window.__ModuleLoader__.load({
         mood: 0,            // [-1, 1]
         energy: 1,          // [0, 1]
         attention: 'free',  // free | drawn | focused
+        // 默认中性关系（V3b Task 5 硬要求）：unlocked/socialGate 直接读 bond.familiarity / bond.affinity，
+        // 补上它「心智永远有 bond」才是类型级的不变式 —— 先建心智、后读账本（读失败）时也只走 0/0。
+        bond: { affinity: 0, familiarity: 0 },
         recent: [],         // 最近 MEMORY_MAX 次互动（导演写，心智读）
         cooldown: {},       // 剧本名 -> 剩余秒
       }
@@ -508,6 +522,29 @@ window.__ModuleLoader__.load({
         if (c.score + j > best.score + (best._j || 0)) { best = c; best._j = j }
       }
       return { intent: best.intent, family: best.family, gate: null, score: best.score, all: cands }
+    }
+
+    /* ==================== §3.6 诱因 → 心智（V3b：诱因不再直接点播） ==================== */
+    /**
+     * 诱因不再直接点播动画，而是**推动心智状态**；下一拍由导演决定这只宠要做什么。
+     * 计划 Task 5 Step 3 原文把这段定义在 start() 里、闭包 minds/world/config —— 那样跨 realm
+     * 单测够不到（__kylinContract 在**装载期**就冻结了，start() 还没跑），而 Step 5 第 1 条
+     * 「没有任何 actor 的 play 被同步调用」必须有观测口。故把**同一份逻辑**提为显式参数的
+     * 工厂作用域函数（函数体逐字照抄计划原文，只把 minds / actors / config 变成形参）。
+     */
+    function deliverStimulus(minds, actors, stimulus, config) {
+      const ids = qualified(stimulus.kind, config)
+      const touched = []
+      for (const id of ids) {
+        const m = minds[id]
+        const a = actors.find((x) => x.pet.id === id)
+        if (!m || !a || a.held) continue
+        if (stimulus.kind === 'turn-ok') { m.mood = clamp(m.mood + 0.35, -1, 1); m.energy = clamp(m.energy + 0.1, 0, 1) }
+        if (stimulus.kind === 'turn-fail') { m.mood = clamp(m.mood - 0.45, -1, 1) }
+        if (stimulus.kind === 'waiting') { m.attention = 'drawn'; a.say(LINES_STIMULUS.waiting) }
+        touched.push(id)
+      }
+      return touched
     }
 
     /* ==================== §3.7 导演 Director 与互动 Interaction ==================== */
@@ -971,22 +1008,10 @@ window.__ModuleLoader__.load({
       /** 诱因 -> 播哪档（waiting 双方探头，只播 idle）。 */
       const CLIP_OF = { 'turn-ok': 'happy', 'turn-fail': 'sad', waiting: 'idle' }
 
-      /** V2 占位：有资格就演。V3 起由 Mind 打分决定「要不要响应」——别把这里当最终形态。 */
-      function react(stimulus) {
-        if (!stimulus || KINDS.indexOf(stimulus.kind) < 0) return []
-        const acted = []
-        for (const id of qualified(stimulus.kind, opts.config)) {
-          const a = actors.find((x) => x.pet.id === id)
-          if (!a || a.held) continue
-          a.say(LINES_STIMULUS[stimulus.kind])
-          a.play(CLIP_OF[stimulus.kind])
-          a.next = rand(2, 4)
-          acted.push(id)
-        }
-        return acted
-      }
+      // V3b Task 5 Step 3：旧的 react() 已删除 —— 诱因改由 §3.6 的 deliverStimulus 施加到心智，
+      // 点播交给导演。世界不再暴露 react（deliverStimulus 不属于世界）。
 
-      return { actors: actors, step: step, separate: separate, nearest: nearest, bump: bump, react: react, qualified: qualified, W: W, H: H }
+      return { actors: actors, step: step, separate: separate, nearest: nearest, bump: bump, qualified: qualified, W: W, H: H }
     }
 
     /* ==================== §5 手势 ==================== */
@@ -1086,13 +1111,39 @@ window.__ModuleLoader__.load({
       const root = createStageRoot()
       document.body.appendChild(root)
       const world = createWorld({ config: config, root: root })
+      /* §3.6：心智与导演 —— 必须在导演第一次 step 之前给每只宠赋 bond 与 x/y（顺序不能反）。
+         缺 bond ⇒ unlocked/socialGate 读 bond.familiarity 直接抛；缺 x/y ⇒ dist 恒 NaN ⇒
+         社交候选 score 全 NaN ⇒ 永不入选 ⇒ 永远开不了合演。 */
+      const minds = {}
+      for (const a of world.actors) {
+        const m = createMind(a.pet.id)
+        m.bond = bondFor(a.pet.id)        // V3 读回的账本快照；读不到就是 {affinity:0, familiarity:0}
+        m.x = a.x; m.y = a.y              // chooseIntent 靠它算距离
+        minds[a.pet.id] = m
+      }
+      const director = createDirector({
+        world: world,
+        minds: minds,
+        model: { bond: bondFor('*') },    // 双方共用一对账本：pairKey 已由 V3 定好
+        rng: Math.random,
+        onStimulus: queueBondEvent,       // ← V3 的防抖写入口；导演**不自己发请求**
+      })
+      // ⚠️ 计划插入地图写的是「createWorld 的下一行」，此处逐字照此放置：导演在创建时就拷贝
+      // `world.pairKey`（createDirector 内 `const pairKey = world.pairKey`），而这一行还没赋 ——
+      // 于是导演的 pairKey 是 undefined，settle 事件带的 pair 靠 queueBondEvent 的
+      // `|| bondState.pairKey` 回退补正。已上报，建议 V4 收口（把赋值提到建导演之前）。
       world.pairKey = pairKey
       wireGestures(world)
       let last = performance.now()
       const frame = (now) => {
         const dt = Math.min(0.05, (now - last) / 1000)
         last = now
-        if (!document.hidden) world.step(dt)   // spec R4：后台标签页不跑
+        if (!document.hidden) {
+          world.step(dt)                  // spec R4 + V1 的位移权威：位置仍然只由世界改
+          // 位置落定后同步进心智 —— 导演读的是心智上的位置（缺它就 NaN，永远开不了合演）。
+          for (const a of world.actors) { const m = minds[a.pet.id]; if (m) { m.x = a.x; m.y = a.y } }
+          director.step(dt)               // V3b 的演出权威：意图与合演。**顺序是语义**：先落定、再决策
+        }
         requestAnimationFrame(frame)
       }
       requestAnimationFrame(frame)
@@ -1107,7 +1158,7 @@ window.__ModuleLoader__.load({
           const cur = Number(body && body.cursor)
           if (!Number.isFinite(cur)) return
           if (since !== null && cur < since) since = null      // host 重启：水位回退，重新起步
-          for (const s of (body && body.stimuli) || []) world.react(s)
+          for (const s of (body && body.stimuli) || []) deliverStimulus(minds, world.actors, s, config)
           since = cur
         } catch (err) { /* 宿主不在时静默：桌宠不该刷屏 */ }
       }
@@ -1144,6 +1195,9 @@ window.__ModuleLoader__.load({
       pairId, normalizeBondPair, applyBondEvents, tierOf, tierClip, balanceCue, curiosityOf,
       readBond, queueBondEvent,
       createMind, stepMind, unlocked, socialGate, chooseIntent,
+      // deliverStimulus 是**唯一新增**的契约键（计划列的键里没有它）：计划 Step 3 把它定义在 start()
+      // 内，跨 realm 单测够不到，而 Step 5 第 1 条要求「play 未被同步调用」有观测口。详见 §3.6 注释。
+      deliverStimulus,
       createDirector, SCRIPTS, ADVANCE, LINES,
     })
 
