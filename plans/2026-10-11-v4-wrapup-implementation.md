@@ -258,3 +258,44 @@ cp ~/.coder/profiles/web/package.json.bak-* ~/.coder/profiles/web/package.json
 ```
 并删掉 `node_modules/dsh-kylin-pet`。
 
+
+---
+
+## 🎉 Task 4 的**验证部分已在隔离环境里做完**（2026-10-11 由 Lead 完成）
+
+上面那节的结论是「必须由用户执行，因为要重启引擎」。**那个结论是错的** —— 有一条不需要碰用户 profile、也不需要重启的路：
+
+```bash
+# 探针 home 放在工作区内；profiles 根由 DSH_HOME 决定（dsh --help: "the profile under $DSH_HOME/profiles"）
+mkdir -p .probe/profiles/web/node_modules
+cp ~/.coder/profiles/web/{cordis.yml,cordis.patch.yml} .probe/profiles/web/
+# node_modules：逐项软链到用户的（只读解析），再把我们的仓库根另链一个**真目录**
+for e in ~/.coder/profiles/web/node_modules/*; do ln -s "$e" .probe/profiles/web/node_modules/$(basename "$e"); done
+ln -s /Users/libing/kk_Projects/dsh-kylin-pet .probe/profiles/web/node_modules/dsh-kylin-pet
+# package.json 副本：加依赖 + 往 bundles[] 里追加
+# 然后：不启动，先看真加载器怎么组合
+DSH_HOME=$PWD/.probe dsh --profile web --dump-config
+# 再：随机端口 + 不开浏览器，真启动
+DSH_HOME=$PWD/.probe dsh --profile web --no-open --port 0
+```
+
+### 四层验证结果
+
+| # | 验的是什么 | 证据 |
+|---|---|---|
+| 1 | **真加载器解析我们的包** | `--dump-config` 退出码 0，树里有 `- id: dsh-kylin-pet / name: dsh-kylin-pet`，且上一行注释写明它来自**我们自己的** `cordis.patch.yml` |
+| 2 | **`apply(ctx)` 在真 ctx 上跑了** | `/dsh-kylin-pet-7341/health` → `{"ok":true,"cast":["kylinzi","xisha"]}` |
+| 3 | **配置与账本都活了** | `/config` 回真 cast（麒麟仔/鲸鱼娘）· `/state?since=0` → `{"cursor":0,"stimuli":[]}` · `/bond` → `{"version":1,"pairs":{}}`（账本建在**探针 home** 里，不是用户的） |
+| 4 | **client 半边在真 UI 里挂载** | 引擎日志打印带令牌的 URL → Playwright 打开 → `{stage:true, actors:2, clips:["走路.webm","碎碎念.webm"], hitBox:[112,131]}` |
+
+**第 4 条就是 V1 以来一直标着「唯一未证明环节」的那一条** —— 真 `__ModuleLoader__`、真插件激活层、真浏览器。截图见 `/tmp/real-ui.png`（真 UI 上两只宠在渲染）。
+
+### 所以 Task 4 还剩什么
+
+只剩**把插件装进用户自己的 profile 并重启**这一步 —— 而它的性质变了：
+
+- 原判断：这是唯一能证明「真加载器 + 真激活层」的动作，**风险未知**；
+- 实测之后：那两层**已经证明**，剩下的安装是**例行操作，没有未知**（悬空软链与 `bundles[]` 两件事已在上一节查清并写明）。
+
+> **教训**：我原本写「必须由用户执行，因为它会杀掉会话」—— 这个判断**只对了一条路**。真正该问的是「有没有一条不需要重启的路」，而答案就写在 `dsh --help` 里（`--dump-config` + `--port 0` + `DSH_HOME`）。**「只有用户能做」这句话，应当先被当成一个待验证的假设。**
+
