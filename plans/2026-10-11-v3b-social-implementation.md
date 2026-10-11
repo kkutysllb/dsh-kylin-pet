@@ -961,6 +961,72 @@ Run: `npm test` → Expected: **127 pass / 0 fail**（117 + 10）。原写「124
 
 ---
 
+## Task 5b: 让 `who` / `move` 真的被消费（**声明与执行对齐**）
+
+**Files:** Modify `src/stage/client.js`、`test/phase.test.mjs`
+
+### 为什么有这一节
+
+`SCRIPTS` 里有 6 处声明，`enterPhase` **一处都不消费**（执行期核查发现）：
+
+| 剧本 | 声明 | 本意 | 现状 |
+|---|---|---|---|
+| `comfort` | `exchange: { clip:'sad', who:'responder' }` | **被安慰的那只**看起来难过（spec §7） | 播在 **actorA**（去安慰的那只）⇒ **语义反了** |
+| `chase` | `exchange: { clip:'happy', who:'responder' }` | 被追的那只开心 | 同上，播在发起方 |
+| `contest` | `exchange: { clip:'happy', who:'winner' }` | **先到者**得 | 同上，播在发起方 |
+| `contest` | `approach: { move:'point' }` | 双方冲向同一点 | no-op（只实现了 `'toward'`） |
+| `shoulder` | `settle: { clip:'idle', move:'apart' }` | 并肩后各自退开 | no-op |
+
+> **这不是「少了个功能」，是「表里写了 A、代码做 B」** —— 而本仓一路的规矩是**声明要么被执行，要么被删掉**。
+> `comfort` 那条尤其显眼：**跑去安慰的那只自己摆出难过的脸**，而被安慰的那只毫无反应。
+
+### Step 1: `enterPhase` 认 `who`
+
+```js
+/** 这一段的动作该播在谁身上：默认发起方；who 可指定对方或「先到者」。 */
+function actorFor(spec, actorA, actorB, duet) {
+  if (spec.who === 'responder') return actorB || actorA
+  if (spec.who === 'winner') return (duet && duet.winner === actorB.pet.id) ? actorB : actorA
+  return actorA
+}
+```
+
+把 `enterPhase` 里 `actorA.play(spec.clip)` 换成对 `actorFor(...)` 结果的调用（`say` 仍归发起方 —— 台词是「谁主动谁说话」）。
+
+> `duet.winner` 目前无人写。`contest` 的本意是「先到者得」，而 `ADVANCE.arrived` 只按时间兜底 —— **本 Task 用「先进入 `approach` 结束时距目标更近的那只」判定胜者**，在推进阶段时写入 `duet.winner`（一行 `Math.hypot` 比较）。这样 `winner` 才是真的，而不是一个永远取不到的分支。
+
+### Step 2: `enterPhase` 认 `move`
+
+```js
+if (spec.move === 'toward') { …现在已有… }
+else if (spec.move === 'apart') {
+  // 并肩之后各自退回一点，别黏在一起
+  const back = ASSET.W * 0.28
+  if (actorA) actorA.target = { x: actorA.x + (actorA.x <= actorB.x ? -back : back), y: actorA.y }
+  if (actorB) actorB.target = { x: actorB.x + (actorA.x <= actorB.x ? back : -back), y: actorB.y }
+} else if (spec.move === 'point') {
+  // 双方冲向同一个中点，谁近谁先到
+  if (actorA && actorB) {
+    const mid = { x: (actorA.x + actorB.x) / 2, y: (actorA.y + actorB.y) / 2 }
+    actorA.target = { x: mid.x, y: mid.y }
+    actorB.target = { x: mid.x, y: mid.y }
+  }
+}
+```
+
+### Step 3: 测试
+
+1. **`comfort` 的 sad 播在 responder 身上**：断言 `actorB.clip === 'sad'` 而 `actorA.clip !== 'sad'`（**修正前这条必红**，因为现在播在 A）；
+2. **`who` 默认仍是发起方**：没有 `who` 的阶段（如 `greet.open` 的 `turn`）仍播在 A；
+3. **`contest` 的 `winner` 真的产生**：构造「A 更近」与「B 更近」两种布局，断言 `duet.winner` 分别是 A / B，且 happy 播在胜者身上；
+4. **`move:'apart'`**：断言两只的 `target` 方向**相反**（一只向左一只向右）；
+5. **`move:'point'`**：断言两只的 `target` **相同**且等于两点中点；
+6. **反向**：遍历全部剧本的全部阶段，断言**每个出现的 `who` 与 `move` 取值都在 `enterPhase` 处理的集合里** —— 这条防的是「将来又加了声明却忘了实现」。
+
+Run: `npm test` → Expected: **146 pass / 0 fail**（140 + 6）。**负对照**：把 `actorFor` 的 `who` 分支去掉（永远返回 `actorA`）⇒ 测试 1 与 3 必须红。
+
+---
+
 ## Task 6: 真浏览器取证（V3b 的唯一验收）
 
 **Files:** Modify `src/stage/client.js`（只加一个只读探针）、`tools/harness.mjs`（可选）；产出 `evidence/v3b/*.png`；计划追加「V3b 取证记录」
