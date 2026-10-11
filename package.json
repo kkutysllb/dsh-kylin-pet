@@ -17,7 +17,7 @@
   },
   "license": "MIT",
   "engines": { "node": ">=22" },
-  "files": ["src", "assets", "cordis.patch.yml", "README.md", "LICENSE"],
+  "files": ["src", "assets", "cordis.patch.yml", "docs", "README.md", "LICENSE"],
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
     "client": { "inject": ["@deepseek-ai/dsh-client-connection"], "platform": "web" },
