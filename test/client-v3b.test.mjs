@@ -253,6 +253,22 @@ const V5CFG = {
   directing: { workStatus: { kylinzi: ['ok'], xisha: ['fail'] } },
 }
 
+test('V5c pickDifferent：点击反应不许连播同一段（参考实现 pick(pool, current) 同语义）', () => {
+  const pool = C.CLICKS
+  assert.equal(C.pickDifferent(pool, '点击开心', () => 0), '开心跳跃', '过滤掉当前段后按 rng 取')
+  for (let i = 0; i < 200; i++) {
+    const name = C.pickDifferent(pool, '点击开心', Math.random)
+    assert.ok(pool.includes(name), '必须出自档位池：' + name)
+    assert.notEqual(name, '点击开心', '不许返回正在播的那一段')
+  }
+  const seen = new Set(Array.from({ length: 80 }, () => C.pickDifferent(pool, '点击开心', Math.random)))
+  assert.ok(seen.size >= 2, '多次点击应能播到不同反应（实际只见过 ' + [...seen].join('/') + '）')
+  // 档位只有一段：没有别的可选，原样返回（参考实现同样退化，不炸）
+  assert.equal(C.pickDifferent(['被拎起'], '被拎起', Math.random), '被拎起')
+  // current 为空：全池可挑
+  assert.ok(pool.includes(C.pickDifferent(pool, null, () => 0)))
+})
+
 test('A8 busyClipOf：只有在忙、没被拎起、且不在合演时才给「状态忙碌」', () => {
   const m = v5Mind({ working: true })
   assert.equal(C.busyClipOf(m, v5Actor('kylinzi')), C.BUSY_CLIP)

@@ -115,11 +115,17 @@ export const INTENTS = Object.freeze({
 })
 
 /** 权重与门限。所有魔数只能出现在这里。 */
+/** 点击反应池：**独立于 CLIPS.happy** —— 那一档混着「余额充裕」等余额播报段，
+ *  参考实现把 clicks（点击反应）与 events.balance（余额）分成两个池，点一下桌宠
+ *  冒出「余额充裕」是语义错位。余额播报仍走 tierClip → CLIPS，互不相干。 */
+export const CLICKS = Object.freeze(['点击开心', '开心跳跃', '庆祝成功'])
+
 export const TUNING = Object.freeze({
   TICK_SEC: 1,                 // 与 /state 轮询对齐（spec §5：每拍约 1s）
   SOCIAL_RADIUS: 360,          // px：超出这个距离的社交候选改判为 approach 或淘汰
   NEAR_RADIUS: 300,            // px：算「已经在旁边」。**必须大于 separate() 的下限 156.8**
                                // （(280+280)*0.28），否则 near/veryNear 恒假、approach 永不结束。见 client.js 同名字段。
+  DRAG_THRESHOLD: 5,           // px：按下后位移 ≥ 此值才算拖拽，小于它松开 = 点击（参考实现 constants.ts 同名常量同值）。client 侧有镜像，漂移门对齐。
   ENERGY_DRAIN: 0.012,         // 每拍衰减
   ENERGY_RECOVER: 0.02,        // 每拍恢复（sleep 时）
   MOOD_REGRESS: 0.01,          // 每拍向 0 回归（spec §4.5：缓慢回归）

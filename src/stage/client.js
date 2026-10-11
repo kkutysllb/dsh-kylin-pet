@@ -31,6 +31,8 @@ window.__ModuleLoader__.load({
       happy: ['点击开心', '开心跳跃', '庆祝成功', '余额健康', '余额充裕', '余额正常'],
     })
     const LOOPING = Object.freeze(['idle', 'walk'])
+    // 点击反应池镜像（host 契约 CLICKS）：独立于 happy 档 —— 那档混着余额播报段。
+    const CLICKS = Object.freeze(['点击开心', '开心跳跃', '庆祝成功'])
     const KINDS = Object.freeze(['turn-ok', 'turn-fail', 'waiting', 'working', 'working-done'])
     // 镜像 `contract.BUSY_CLIP`。**它必须在 SHARED_KEYS 里** —— 我第一次改 client 时
     // 在 idleChain 里用了它却忘了镜像，测试全绿（因为没有一条测试走过忙碌分支），
@@ -61,6 +63,7 @@ window.__ModuleLoader__.load({
       // 原来的 150 比它还小 ⇒ near / veryNear 都是**恒假式** ⇒ approach 阶段永远不结束
       // ⇒ 6s 撞超时 abort ⇒ abort 不上冷却 ⇒ 立刻重开同一场，无限循环。
       // 2026-10-11 由 Task 6 真机取证发现（单测发现不了：两个常量分属两个子系统）。
+      DRAG_THRESHOLD: 5,           // px：按下后位移 ≥ 此值才算拖拽，小于它松开 = 点击。host 契约同名字段，漂移门对齐。
       ENERGY_DRAIN: 0.012,         // 每拍衰减
       ENERGY_RECOVER: 0.02,        // 每拍恢复（sleep 时）
       MOOD_REGRESS: 0.01,          // 每拍向 0 回归（spec §4.5：缓慢回归）
@@ -666,6 +669,12 @@ window.__ModuleLoader__.load({
      * 注意**不检查 `target`**（正在走向某处）：走上几秒再切忙碌比半路急停自然，
      * 而气泡是立刻出的，用户不会觉得没反应。
      */
+    /** 点击反应选段：从档位里随机挑一段、**不与正在播的相同**（档位只有一段时只能原样返回）。 */
+    function pickDifferent(pool, current, rng) {
+      const rest = pool.filter((n) => n !== current)
+      return pick(rest.length ? rest : pool, rng)
+    }
+
     function busyClipOf(mind, actor) {
       if (!mind || !actor) return null
       if (actor.held || actor.busy) return null
@@ -1235,6 +1244,8 @@ window.__ModuleLoader__.load({
         }
 
         a.hit.addEventListener('pointerdown', (e) => {
+          // 只认左键：右键/中键进入拖拽判定会与右键菜单打架（参考实现 pointerdown 第一行同款，两端一致）。
+          if (e.button !== 0) return
           e.preventDefault()
           try { a.hit.setPointerCapture(e.pointerId) } catch (err) { /* 合成事件/已释放的 pointer 不该炸 */ }
           grab = { id: e.pointerId, sx: e.clientX, sy: e.clientY, dx: e.clientX - a.x, dy: e.clientY - a.y, moved: false }
@@ -1243,7 +1254,8 @@ window.__ModuleLoader__.load({
 
         a.hit.addEventListener('pointermove', (e) => {
           if (!grab || e.pointerId !== grab.id) return
-          if (!grab.moved && Math.hypot(e.clientX - grab.sx, e.clientY - grab.sy) > 4) {
+          // 参考：位移 < DRAG_THRESHOLD 一律不算拖（≥5 才算），点击/拖拽的判据只有这一个。
+          if (!grab.moved && Math.hypot(e.clientX - grab.sx, e.clientY - grab.sy) >= TUNING.DRAG_THRESHOLD) {
             grab.moved = true
             a.held = true
             a.target = null
@@ -1261,7 +1273,12 @@ window.__ModuleLoader__.load({
           grab = null
           a.hit.style.cursor = 'grab'
           if (!dragged) {
-            a.play('happy')
+            // 参考实现 handleClick：点击 = 先**收手停住**再回应。不清 target 会「边走边播点击反应」，
+            // 而且 onEnded 被 a.target 短路成「不回待机」，走路状态就再也出不去了。
+            a.target = null
+            // 从 happy 档随机点一段且**不与正在播的相同**（参考实现 pick(pool, current) 同语义）：
+            // 连点两下播同一段，看起来就像没反应。
+            a.play('happy', pickDifferent(CLICKS, a.clipName, a.rng))
             const mate = world.nearest(a, Infinity)
             // spec §8：对方是否好奇凑过来由**关系**决定（V1 的 50% 占位已被 affinity 取代）
             if (mate && !mate.held && Math.random() < curiosityOf(bondState.affinity)) {
@@ -1455,7 +1472,7 @@ window.__ModuleLoader__.load({
     let probe = null
 
     exports.__kylinContract = Object.freeze({
-      ROUTE_PREFIX, ASSET, CLIPS, LOOPING, KINDS, BUSY_CLIP, BOND, BALANCE_TIERS, ANIM_EXT, qualified,
+      ROUTE_PREFIX, ASSET, CLIPS, CLICKS, LOOPING, KINDS, BUSY_CLIP, BOND, BALANCE_TIERS, ANIM_EXT, qualified,
       INTENTS, TUNING,
       // V5：两张文案表 + 应和句也挂出来 —— 它们要能被跨 realm 单测逐字钉住，
       // 否则「代码里写了什么词」只能靠人读源码确认。
@@ -1464,6 +1481,7 @@ window.__ModuleLoader__.load({
       readBond, queueBondEvent,
       createMind, stepMind, unlocked, socialGate, chooseIntent,
       busyClipOf,
+      pickDifferent,
       // deliverStimulus 是**唯一新增**的契约键（计划列的键里没有它）：计划 Step 3 把它定义在 start()
       // 内，跨 realm 单测够不到，而 Step 5 第 1 条要求「play 未被同步调用」有观测口。详见 §3.6 注释。
       deliverStimulus,
@@ -1487,22 +1505,33 @@ window.__ModuleLoader__.load({
      */
     function PetOverlay() {
       const React = require('react')
-      const ref = React.useRef(null)
       React.useEffect(() => {
+        // 槽位只提供**生死**（插件被禁用 → 本组件卸载 → 下面的清理跑 → 桌宠当场消失）；
+        // 舞台本体必须 portal 到 body：槽位容器在应用自己的堆叠上下文里，z-index 写到
+        // 2147483000 也会被后画的应用内容盖住（2026-10-11 实测 elementFromPoint 命中
+        // 应用的 <p>，点击全被吃、拖拽全失效）。holder 的 add/remove 都在本组件手里，
+        // 与 V5b 的「不许留孤儿」同一契约 —— 这是 portal，不是 V5b 之前的无人直挂。
+        const holder = document.createElement('div')
+        holder.style.position = 'fixed'
+        holder.style.inset = '0'
+        holder.style.pointerEvents = 'none'
+        holder.style.zIndex = '2147483000'
+        document.body.appendChild(holder)
         let stop = null
         let gone = false
-        start(ref.current).then((fn) => {
+        start(holder).then((fn) => {
           stop = fn
           // 启动是异步的（要读配置与账本）：若在它跑完之前就被卸载，得补收一次，
           // 否则「开关快速关了又开」会留下一个没有主的舞台。
           if (gone && fn) fn()
         }, (err) => console.warn('[dsh-kylin-pet] 启动失败：', err))
-        return () => { gone = true; if (stop) stop() }
+        return () => {
+          gone = true
+          if (stop) stop()
+          holder.remove()
+        }
       }, [])
-      return React.createElement('div', {
-        ref: ref,
-        style: { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: 2147483000 },
-      })
+      return null
     }
 
     exports.apply = (ctx) => {

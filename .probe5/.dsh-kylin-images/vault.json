@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "channels": [],
+  "settings": {
+    "defaultChannelId": "",
+    "defaultModel": "",
+    "defaultAspectRatio": "3:4",
+    "defaultResolution": "2k",
+    "defaultFormat": "png",
+    "defaultQuality": "auto",
+    "defaultCount": 1,
+    "concurrency": 2,
+    "globalNegative": [],
+    "includeTemplatePitfalls": true,
+    "budgetConfirmCny": 1,
+    "confirmUnknownPrice": true,
+    "cacheEnabled": true,
+    "cacheDir": "",
+    "cacheMaxEntries": 200
+  }
+}

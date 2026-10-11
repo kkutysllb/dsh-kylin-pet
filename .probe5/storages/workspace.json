@@ -1,0 +1,28 @@
+{
+  "unit": {
+    "name": "workspace",
+    "version": 2
+  },
+  "global": {
+    "initialized": true,
+    "workspaceIds": [
+      "dad3fcb8-aaf4-47d0-9f9f-7f438c878851"
+    ],
+    "archivedSessionIds": [],
+    "pinnedSessionIds": [],
+    "defaultWorkspaceId": "dad3fcb8-aaf4-47d0-9f9f-7f438c878851"
+  },
+  "tables": {
+    "workspaces": {
+      "dad3fcb8-aaf4-47d0-9f9f-7f438c878851": {
+        "path": "/Users/libing/Documents/deepseek-harness/default-workspace",
+        "title": "default-workspace",
+        "sessionIds": [
+          "session-db7d5447-42cc-48d7-9c6c-93b5a8912d0a"
+        ],
+        "createdAt": "2026-10-11T10:36:47.424Z",
+        "updatedAt": "2026-10-11T10:36:47.472Z"
+      }
+    }
+  }
+}

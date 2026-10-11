@@ -1,0 +1,288 @@
+- insert:
+    - id: mcp-fetch
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: fetch
+        transport: stdio
+        command: uvx
+        args:
+          - mcp-server-fetch==2026.8.18
+- insert:
+    - id: mcp-context7
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: context7
+        transport: stdio
+        command: npx
+        args:
+          - -y
+          - "@upstash/context7-mcp@4.1.1"
+- insert:
+    - id: mcp-sequential-thinking
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: sequential-thinking
+        transport: stdio
+        command: npx
+        args:
+          - -y
+          - "@modelcontextprotocol/server-sequential-thinking@2026.8.31"
+- insert:
+    - id: mcp-playwright
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: playwright
+        transport: stdio
+        command: npx
+        args:
+          - -y
+          - "@playwright/mcp@0.0.81"
+          - --cdp-endpoint
+          - http://127.0.0.1:9223
+- insert:
+    - id: mcp-memory
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: memory
+        transport: stdio
+        command: npx
+        args:
+          - -y
+          - "@modelcontextprotocol/server-memory@2026.8.31"
+- insert:
+    - id: mcp-zai-mcp-server
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: zai-mcp-server
+        transport: stdio
+        command: npx
+        args:
+          - -y
+          - "@z_ai/mcp-server"
+        env:
+          Z_AI_API_KEY: c29315237d0d47f3a32955565be1c65a.8Ke9ie0i6vbeIe9Z
+          Z_AI_MODE: ZHIPU
+#
+# ui-deliverables：只关原生轮尾卡（dsh-file-review-kcoder 插件接管该行，
+# 否则同 turn 双卡：插件审查卡 + 原生 monospace 卡并列）。patch 的 config
+# 是整行替换语义——该行原本无 config，无键可漏；其余注册（Definition /
+# present 工具行 / changes-review 侧栏 Tab / /api/present.host 路由）
+# 不受影响。生效需重启 dsh 进程 + 刷新页面（名册启动时烤进 __DSH_BOOT__）。
+- id: ui-deliverables
+  config:
+    tailCard: false
+
+# ── settings.yaml 一次性导入未落位的用户值（2026-09-22 手工迁移，源 settings.yaml.imported）──
+- id: ui-theme
+  name: "@deepseek-ai/dsh-client-ui-theme"
+  config:
+    preference: dark
+    fontSize: 14
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: zai-coding-cn
+    model: glm-5.3-flash
+    reasoningEffort: max
+
+# ── settings.yaml 一次性导入未落位的 sidebar 偏好（2026-09-22 手工迁移；该行 id 为 better-sidebar，
+#    与 section 名不一致，上游导入按 id 查找必然失败——见升级分析 §8.3）──
+- id: better-sidebar
+  name: dsh-coding-sidebar
+  config:
+    agentOpenTools: true
+    defaultWidthPercent: 35
+    titleBarCompat: true
+    titleBarStripPx: 48
+    tabsEnabled:
+      dsh-docs-panel:docs: false
+      diff: true
+      git: true
+      editor: true
+    agentTerminalTools: true
+    htmlViewerNoSandbox: true
+    htmlViewerDefaultUnsafe: true
+    browserNoSandbox: true
+    openByDefault: false
+- id: ui-settings-general
+  name: "@deepseek-ai/dsh-client-ui-settings-general"
+  config:
+    welcomeNoticeVersion: 2026-08-13.1
+- id: locale
+  name: "@deepseek-ai/dsh-client-locale"
+  config:
+    preference: zh
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      zai-coding-cn:
+        models:
+          - id: glm-5.3
+            name: GLM-5.3
+            contextWindow: 1000000
+            maxTokens: 131072
+            input:
+              - text
+          - id: glm-5.3-flash
+            name: GLM-5.3-Flash
+            contextWindow: 1000000
+            maxTokens: 131072
+            input:
+              - text
+              - image
+        apiKeyEnv: ZAI_CODING_CN_API_KEY
+        baseURL: https://open.bigmodel.cn/api/coding/paas/v4
+      qwen-token-plan-cn:
+        models:
+          - id: qwen3.8-flash
+            name: Qwen3.8 Flash
+            contextWindow: 1000000
+            maxTokens: 131072
+          - id: deepseek-v4.1-flash
+            name: DeepSeek-Flash
+            input:
+              - text
+              - image
+            contextWindow: 1024000
+            maxTokens: 256000
+        baseURL: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+        apiKeyEnv: QWEN_TOKEN_PLAN_CN_API_KEY
+      openai-codex:
+        baseURL: https://tianyuai.lol
+        models:
+          - id: gpt-5.6-luna
+            name: GPT-5.6 Luna
+            contextWindow: 272000
+            maxTokens: 128000
+          - id: gpt-5.6-sol
+            name: GPT-5.6 Sol
+            contextWindow: 272000
+            maxTokens: 128000
+          - id: gpt-5.6-terra
+            name: GPT-5.6 Terra
+            contextWindow: 272000
+            maxTokens: 128000
+          - id: gpt-6-astra
+            name: GPT-6 Astra
+            contextWindow: 272000
+            maxTokens: 128000
+        apiKeyEnv: OPENAI_CODEX_API_KEY
+      vllm:
+        displayName: deepseek-v41
+        apiKeyEnv: VLLM_API_KEY
+        api: openai-completions
+        baseURL: http://111.19.156.25:8000/v1
+        models:
+          - id: deepseek-v41
+            name: deepseek-v41
+            input:
+              - text
+              - image
+            contextWindow: 512000
+            maxTokens: 256000
+      xiaomi:
+        apiKeyEnv: XIAOMI_API_KEY
+        models:
+          - id: mimo-v2.6-pro
+            name: MiMo-V2.6-Pro
+            contextWindow: 1048576
+            maxTokens: 131072
+            input:
+              - text
+              - image
+          - id: mimo-v2.6-flash
+            name: MiMo-V2.6-Flash
+            contextWindow: 1048576
+            maxTokens: 131072
+            input:
+              - text
+              - image
+- id: ui-chat
+  name: "@deepseek-ai/dsh-client-ui-chat"
+  config:
+    transcriptView: detailed
+- id: llm-deepseek
+  name: "@deepseek-ai/dsh-llm-deepseek"
+  config:
+    models:
+      - id: deepseek-flash
+        name: DeepSeek-Flash
+        contextWindow: 1000000
+        inputModalities:
+          - text
+          - image
+        systemPromptUpdate: in-history
+      - id: deepseek-v4-pro
+        name: DeepSeek-V4-Pro
+        description: Stronger agentic coding, knowledge, and difficult reasoning; suited
+          to complex or quality-critical tasks at higher cost.
+        contextWindow: 1000000
+        inputModalities:
+          - text
+- id: llm-deepseek
+  name: "@deepseek-ai/dsh-llm-deepseek-api-key"
+  config:
+    models:
+      - id: deepseek-flash
+        name: DeepSeek-Flash
+        contextWindow: 1000000
+        maxTokens: 256000
+        inputModalities:
+          - text
+          - image
+        systemPromptUpdate: in-history
+      - id: deepseek-v4-pro
+        name: DeepSeek-V4-Pro
+        description: Stronger agentic coding, knowledge, and difficult reasoning; suited
+          to complex or quality-critical tasks at higher cost.
+        contextWindow: 1000000
+        inputModalities:
+          - text
+
+# ── graphrag（dsh-kylin-vibe）：补上模型路由 ───────────────────────────────
+# 排查（2026-10-03）：插件自带 patch 里 graphrag-provider-local 的 model 是注释
+# 状态 → 该行 config.model 解析为 null → status 报 llmAvailable=false，
+# graphrag_index 在 LLM 门直接抛 [NO_PROVIDER]，索引根本没机会启动（与审批无关）。
+# patch 的 config 是整行替换语义：该行原有 roots 必须一并带上，否则会被抹掉。
+- id: graphrag-provider-local
+  config:
+    roots: [] # 保持原值；本机 KB「coding知识库」的授权根在 registry 内
+    model:
+      # 两者都必须非空才生效（0.1.2 无「跟随宿主当前选择」回退）
+      provider: qwen-token-plan-cn
+      model: deepseek-v4.1-flash
+- id: dsh-kylin-memory
+  name: dsh-kylin-memory
+  config:
+    assistantTools: search
+    extractionEnabled: true
+    recallEnabled: true
+    messageRetention:
+      keep: all
+      recentTurns: 0
+      retentionDays: 0
+      batchSize: 500
+      dryRun: false
+    contextCompactionEnabled: true
+    recallScope: all
+    projectCompletedTurnTools: true
+    freshTurnCount: 50
+    maintenanceInterval: 50
+    recallMaxNodes: 20
+    semanticScoreThreshold: 0.8
+  disabled: false
+- id: subagent-model-selection-settings
+  name: "@deepseek-ai/dsh-tool-subagent/model-selection-settings"
+  config:
+    enabled: true
+    allowedModels:
+      - provider: zai-coding-cn
+        model: glm-5.3-flash
+- id: optional-terminal-pwsh
+  disabled: true
+- id: agent-preset-registry
+  name: "@deepseek-ai/dsh-agent-preset-registry"
+  config:
+    default: standard
+    selectedDefault: ptc

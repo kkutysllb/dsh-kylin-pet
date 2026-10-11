@@ -1,0 +1,41 @@
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {
+    "@deepseek-ai/dsh-subagent-claude-code": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-subagent-codex": "0.2.1-alpha.2",
+    "dsh-animations": "^1.2.4",
+    "dsh-context": "^0.67.0",
+    "dsh-kylin-images": "^0.1.1",
+    "dsh-kylin-memory": "^0.2.3",
+    "dsh-kylin-pet": "link:/Users/libing/kk_Projects/dsh-kylin-pet",
+    "dsh-super-ppts": "^1.5.1"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-ssh-remote",
+        "dsh-shell-prefs",
+        "dsh-skills-bundle",
+        "@deepseek-ai/dsh-experimental-agent-team-profile",
+        "@deepseek-ai/dsh-experimental-badge-skill-bundle",
+        "@deepseek-ai/dsh-experimental-session-search",
+        "@deepseek-ai/dsh-experimental-session-titles-bundle",
+        "@deepseek-ai/dsh-experimental-terminal-bundle",
+        "@deepseek-ai/dsh-experimental-tool-worktree",
+        "@deepseek-ai/dsh-experimental-ralph-bundle",
+        "@deepseek-ai/dsh-subagent-codex",
+        "dsh-super-ppts",
+        "dsh-animations",
+        "@deepseek-ai/dsh-subagent-claude-code",
+        "dsh-kylin-memory",
+        "dsh-context",
+        "@deepseek-ai/dsh-experimental-cot-translation-bundle",
+        "dsh-kylin-images",
+        "dsh-kylin-pet"
+      ]
+    }
+  }
+}
