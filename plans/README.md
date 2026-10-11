@@ -11,9 +11,10 @@
 | [2026-10-11-v2-events-implementation.md](2026-10-11-v2-events-implementation.md) | V2 事件诱因面（**其取证记录已被 V3b 标注部分失效**） |
 | [2026-10-11-v3-bond-balance-implementation.md](2026-10-11-v3-bond-balance-implementation.md) | V3 关系与余额（含取证记录 + 对 V2 的更正） |
 | [2026-10-11-v3b-social-implementation.md](2026-10-11-v3b-social-implementation.md) | V3b 心智 / 导演 / 8 剧本（含取证记录） |
-| [2026-10-11-v4-wrapup-implementation.md](2026-10-11-v4-wrapup-implementation.md) | V4 收口 |
+| [2026-10-11-v4-wrapup-implementation.md](2026-10-11-v4-wrapup-implementation.md) | V4 收口（`/pet` + 真机四层验证） |
+| [2026-10-11-v5-agent-activity-implementation.md](2026-10-11-v5-agent-activity-implementation.md) | V5 执行期活动面（任务在忙 + 按类别的气泡） |
 
-证据在 `evidence/{v1,v2,v3,v3b}/`，共 13 张截图。
+证据在 `evidence/{v1,v2,v3,v3b,v5}/`，共 16 张截图。
 
 ## 📜 前史：fork 改皮期（**不要照它执行**）
 
