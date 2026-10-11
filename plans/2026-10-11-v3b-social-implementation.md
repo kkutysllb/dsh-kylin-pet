@@ -493,7 +493,7 @@ const SCRIPTS = Object.freeze({
 
 /** 文案表：剧本 × 角色。**全原创**（不带任何上游措辞），V4 可顺势换表情包图。 */
 const LINES = Object.freeze({
-  greet:     { kylinzi: '在呢',     xisha: '嗯' },
+  greet:     { kylinzi: '来啦',     xisha: '嗯' },     // 「在呢」与 waiting 撞句，已拆
   gift:      { kylinzi: '看看这个', xisha: '……谢谢' },
   tease:     { kylinzi: '略',       xisha: '……' },
   comfort:   { kylinzi: '别难过',   xisha: '我没事' },
