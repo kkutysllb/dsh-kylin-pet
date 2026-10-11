@@ -874,17 +874,19 @@ function deliverStimulus(stimulus) {
 }
 ```
 
-### 插入地图（**以 `4343904` 为准的行号；行号会漂，锚点不会 —— 以锚点为准**）
+### 插入地图（**行号以 `a73abe2` 为准；行号会漂，锚点不会 —— 一律认锚点**）
 
-| 要改的地方 | 当前行 | **锚点（认这个）** | 动作 |
+| 要改的地方 | 行号 | **锚点（认这个）** | 动作 |
 |---|---|---|---|
-| 建 `minds` + `createDirector` | `1014` 之后 | `const world = createWorld({ config: config, root: root })` 的下一行 | Step 1 插入 |
-| 导演进主循环 | `1021` | `if (!document.hidden) world.step(dt)` | 其后加 `director.step(dt)` |
-| 删除旧 `react()` | `905-917` | `/** V2 占位：有资格就演。 */` 起、到该函数结束 | 删除 |
-| `world` 返回对象去掉 `react` | `920` | `return { actors: actors, step: step, ... react: react, ... }` | 去掉 `react: react,` |
-| 调用点换成 `deliverStimulus(s)` | `1036` | `for (const s of (body && body.stimuli) || []) world.react(s)` | Step 3 |
+| 建 `minds` + `createDirector` | `1088` 之后 | `const world = createWorld({ config: config, root: root })` 的下一行 | Step 1 插入 |
+| 导演进主循环 | `1095` | `if (!document.hidden) world.step(dt)` | 其后加 `director.step(dt)` |
+| 删除旧 `react()` | `975-987` | `function react(stimulus) {` 起、到该函数结束 | 删除 |
+| `world` 返回对象去掉 `react` | `989` | `return { actors: actors, step: step, ... react: react, ... }` | 去掉 `react: react,` |
+| 调用点换成 `deliverStimulus(s)` | `1110` | `for (const s of (body && body.stimuli) || []) world.react(s)` | Step 3 |
 
-> `CLIP_OF`（`:901`）在 `react` 删除后可能变成死代码 —— **本片不动它**，留给 V4 收口时清理（删与不删都不影响行为，但别在同一片里混两种改动）。
+> `CLIP_OF`（`:969`）在 `react` 删除后可能变成死代码 —— **本片不动它**，留给 V4 收口时清理（删与不删都不影响行为，但别在同一片里混两种改动）。
+>
+> **行号会过期**：这张表第一次写时标的是 `905/920/1014/1021/1036`（`4343904` 时点），到 `a73abe2` 就已全部偏移。**锚点那列才是可执行的。**
 
 **⚠️ 改名必须同时处理三处引用 + 一次作用域迁移（漏任何一处都会 TypeError 或 ReferenceError）**
 
