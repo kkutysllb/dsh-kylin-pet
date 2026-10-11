@@ -547,7 +547,16 @@ Run: `npm test` → Expected: **117 pass / 0 fail**（106 + 11）。原写「114
 
 ## Task 4b: **阶段执行器**（补 Task 3/4 缺掉的一整块 —— **没有它，V3b 跑不起来**）
 
-**Files:** Modify `src/stage/client.js`；Create `test/phase.test.mjs`
+**Files:** Modify `src/stage/client.js`、**Modify `test/director.test.mjs`**；Create `test/phase.test.mjs`
+
+> **⚠️ 为什么必须动 `test/director.test.mjs`**（2026-10-11 执行期发现）：Task 3/4 落下的一条断言是**逐字段比较 `duet` 对象**的：
+>
+> ```
+> expected: {"at":0,"deadline":6,"initiator":"kylinzi","kind":"greet","outcome":null,"phase":"approach","responder":"xisha"}
+> actual:   {... 同样的内容 ..., "sincePhase":0}
+> ```
+>
+> 而 Step 2 恰恰要求给 `duet` 加 `sincePhase` —— **这是本 Task 自己造成的破坏**，修它是本 Task 的一部分，不是越界。修法：在那条断言的期望对象里补上 `sincePhase: 0`（**不要**改成忽略未知键 —— 那样这条断言就失去「不多不少」的判别力了）。
 
 ### 为什么有这一节
 
