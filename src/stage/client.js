@@ -387,6 +387,7 @@ window.__ModuleLoader__.load({
         clipName: null,             // 当前实际素材名（余额档位要播指定那一段，不能随机）
         held: false,
         front: 0,
+        gen: 0,                      // 切换代次：作废过期的 loadeddata 回调（见 a.play ③）
         rng: rngOf(fnv(pet.id)),
         next: 1.5 + (fnv(pet.id) % 1000) / 500,   // 首拍错开
         target: null,
@@ -402,24 +403,44 @@ window.__ModuleLoader__.load({
         vids[1].style.transform = t
       }
 
-      /** 播表现档；给了 exact 就播**那一段**素材（余额档位必须精确到「余额充裕」这类名字）。 */
+      /**
+       * 播表现档；给了 exact 就播**那一段**素材（余额档位必须精确到「余额充裕」这类名字）。
+       *
+       * ⚠️ **这段的时序是对着参考实现逐条抄的**（dsh-pet pet.ts 的 switchTo），
+       * 五条防线缺一条就会重现「屏幕闪烁 + 人物闪烁」：
+       *   ① 写**后台**缓冲 —— 前台还在播，用户任何一帧看到的都是完整画面；
+       *   ② 等 §loadeddata§（readyState ≥ 2）才翻 opacity。**不能等 play() 的 promise** ——
+       *      它 resolve 的时点早于首帧绘制（于是切到一片空白），且不保证与请求同序；
+       *   ③ **代次检查**：切换途中又来了新请求就放弃本次。没有它，旧切换的 promise 后到时
+       *      会把 front 翻回去 ⇒ 在 A/B 之间来回翻 ⇒ 两只一起闪；
+       *   ④ 降级的视频 pause()（ended 监听另按「只认前台」过滤，等价于参考实现的清 handler）；
+       *   ⑤ readyState ≥ 2 直接切 —— 已缓存的素材不该卡在事件上。
+       */
       a.play = (clip, exact) => {
         if (!exact && a.clip === clip) return
         const chosen = exact || pick(CLIPS[clip], a.rng)
         if (a.clip === clip && a.clipName === chosen) return
         a.clip = clip
         a.clipName = chosen
-        const url = animUrl(pet, chosen)
         const back = vids[1 - a.front]
+        const gen = ++a.gen
         back.loop = LOOPING.indexOf(clip) >= 0
-        back.setAttribute('src', url)
-        back.currentTime = 0
-        back.play().then(() => {
+        back.src = animUrl(pet, chosen)
+        back.muted = true
+        back.playsInline = true
+        back.load()
+        const onReady = () => {
+          back.removeEventListener('loadeddata', onReady)
+          if (a.gen !== gen) return          // ③ 过期的切换：一个字都不许改
+          const old = vids[a.front]
           back.style.opacity = '1'
-          vids[a.front].style.opacity = '0'
-          vids[a.front].pause()
+          old.style.opacity = '0'
+          old.pause()
           a.front = 1 - a.front
-        }, () => { /* 素材缺失不该打断舞台：静默保留上一帧 */ })
+          back.play().catch(() => { /* 自动播放被拦：画面已就位，不打断舞台 */ })
+        }
+        back.addEventListener('loadeddata', onReady)
+        if (back.readyState >= 2) onReady()   // ⑤
       }
 
       /** 冒一句对白；ms 到点自动淡出。空文案当「不说」——别把气泡点亮成空气泡。 */
@@ -889,22 +910,19 @@ window.__ModuleLoader__.load({
           const pick = chooseIntent(m, other ? minds[other.pet.id] : null, rng)
           events.push({ type: 'intent', pet: a.pet.id, intent: pick.intent, family: pick.family })
           if (pick.family !== 'social' || !other) {
-            // V5：**任务执行期导演不排独处动作**。这一行原本每帧都 play，会在 world.step
-            // 播完「状态忙碌」之后把它盖掉 —— 实测里忙碌档被覆盖了 186 次而画面纹丝不动，
-            // 因为覆盖者就是这里。帧序是 world.step → director.step，**导演是最后写者**。
+            // **独处动作一字不排。** 独处的唯一写者是世界（`idleChain`）——
+            // 这里曾经还会 `a.play(...)` + 设 `a.target` + 重挂 `a.next`，于是同一只宠有**两个写者**：
             //
-            // ⚠️ 2026-10-11 真浏览器取证（用户报「屏幕闪烁」）：上面那个闸只挡住了「在忙」这一种冲突，
-            // **没挡住「不忙时导演与 idleChain 抢同一只宠」**。导演每帧重挑意图、每帧 play 一次，
-            // 而 `chooseIntent` 的 argmax 在相邻帧之间会翻（walk ↔ idle），于是把 idleChain
-            // 刚点播的「转身」在下一帧盖回「待机」——实测 3 秒内 18 次真实 src 变更。
-            // 修法：**导演尊重世界的节奏**。`a.next` 是 world 的「下一次可以换动作」计时器，
-            // `idleChain` 自己就按它走；导演也在同一个闸门后动作，两边从此不抢。
-            if (!m.working && a.next <= 0) {
-              const want = pick.intent === 'walk' ? 'walk' : 'idle'
-              a.play(want)
-              if (want === 'walk') a.target = { x: rand(0.15, 0.85) * W(), y: rand(0.5, 0.92) * H() }
-              a.next = rand(2.5, 7)
-            }
+            //   · 帧序是 world.step → director.step，导演是**最后写者**；
+            //   · 世界的 `idleChain` 走 walk 分支时**不重挂 `a.next`**（它靠 `a.target` 早退），
+            //     所以「`a.next <= 0`」这道闸在那个瞬间**是开着的** ⇒ 下一帧导演立刻把刚播的「走路」盖掉。
+            //   · 实测切换间隔出现 **233ms 的双切** —— 交叉淡入（110ms）还没走完就再切一次，
+            //     这就是用户报的「屏幕闪烁 + 人物闪烁」。
+            //
+            // 参考实现（dsh-pet）的教训是一致的：**只有一个决策点** —— 它在 `ended` 回调里
+            // `pickNext()`，除此之外没有任何地方 `play`。多一个写者，就多一种时序竞态。
+            //
+            // 导演保留它的**决策**（上面那行 `intent` 事件照发，社交路径照走），只是不再动手播。
             continue
           }
           // 意图名 ≠ 剧本名。approach 是「走过去」这个前导动作，SCRIPTS 里没有它。

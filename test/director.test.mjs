@@ -203,19 +203,31 @@ test('freePartner：跳过被拎起 / busy 的宠，且不会返回自己', () =
   assert.equal(s.d.freePartner(s.A), s.B)
 })
 
-test('Task5c·6 导演尊重 world 的 a.next：没轮到时**一次都不点播**（每帧抢 ⇒ 屏幕闪烁）', () => {
-  // 真浏览器取证（用户报「屏幕闪烁」）：3 秒内 **18 次真实 src 变更**，档位在
-  // 「状态整理」（idle 档）与「状态张望」（walk 档）之间每 2 帧翻一次 ——
-  // 因为导演每帧重挑意图、每帧 play，把 idleChain 刚点播的「转身」立刻盖回去。
+test('Task5c·6 导演**永不**点播独处动作 —— 独处的唯一写者是世界', () => {
+  // 这条的口径升级过两次，记下来免得下一个人以为它在守别的东西：
+  //
+  //  ① 最初：导演每帧 play，3 秒 18 次真实 src 变更；
+  //  ② 第一版修法：给导演加「a.next ≤ 0 才 play」的闸，这条测试就守着那道闸；
+  //  ③ **2026-10-11 继续追「233ms 双切」时发现那道闸不够**：世界的 `idleChain` 走 walk 分支时
+  //     **不重挂 a.next**（它靠 a.target 早退），所以关键时刻闸是**开着的**，
+  //     导演下一帧照样盖掉刚播的走路 ⇒ 淡入（110ms）没走完就再切 ⇒ 用户看到的「闪」。
+  //  ④ 参考实现（dsh-pet）给的答案是**只有一个决策点**：它在 `ended` 回调里 `pickNext()`，
+  //     除此之外没有任何地方 play。于是导演的独处点播**整个删掉**，测试随之守更强的不变式。
   const s = mkScene()
-  s.B.held = true          // 没有可配对的对手 ⇒ 稳定走「独处」那条路
-  s.A.next = 5             // 远未到点
-  for (let i = 0; i < 90; i++) s.d.step(1 / 60)
-  assert.equal(s.A.plays.length, 0, 'a.next 还远未到点，导演不该点播（实际 ' + s.A.plays.length + ' 次）')
-  // 到点后必须能动作，否则上面那条是「导演压根不工作」的假绿
+  s.B.held = true                       // 没有可配对的对手 ⇒ 稳定走「独处」那条路
+  const evs = []
+  for (const gate of [5, 0]) {          // 闸门开着、关着，都不许点播
+    s.A.next = gate
+    for (let i = 0; i < 90; i++) evs.push(...s.d.step(1 / 60))
+    assert.equal(s.A.plays.length, 0,
+      'a.next=' + gate + '：导演不该点播任何独处动作（实际 ' + s.A.plays.length + ' 次）')
+  }
+  // 反空转：导演必须**仍在做决策**（intent 事件照发）—— 否则上面那条只是「导演根本没跑」的假绿。
   s.A.next = 0
-  s.d.step(1 / 60)
-  assert.ok(s.A.plays.length > 0, '到点后必须能排动作')
+  for (let i = 0; i < 30; i++) evs.push(...s.d.step(1 / 60))
+  assert.ok(evs.some((e) => e.type === 'intent'),
+    '导演仍要发 intent 事件（它保留决策，只是不再动手播）')
+  assert.equal(s.A.plays.length, 0, '删掉点播之后也不许再生出点播')
 })
 
 test('Task5c·7 freePartner 不招募正在干活的宠（否则合演会把忙碌画面掀掉）', () => {
