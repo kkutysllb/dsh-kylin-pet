@@ -364,3 +364,37 @@ Authorization: Bearer <DEEPSEEK_API_KEY>
 > ⚠️ **余额是字符串，不是数字。** 这直接决定了「绝不伪造数字」怎么落地：**解析时保留原始字符串**，只在算档位阈值时转一次数值；档位判定失败就退 `unavailable`，**不许把 `"110.00"` 变成 `110` 再假装它精确**。`balance_infos` 是**数组**（可能多币种），选币种要有明确规则并写进 detail，不能默认取 `[0]` 了事。
 
 **一条如实登记的失败探针**：我本想用「拿假 key 打接口，401=存在 / 404=不存在」来低成本验证端点存在性 —— 但**控制组（一个不存在的路径）也返回 401**（DeepSeek 在鉴权层就拦了）。⇒ **该探针无判别力，不作证据**，端点形状改由官方文档确认。
+
+---
+
+## 15. V4 前置侦察（2026-10-11，Lead 实测）
+
+「设置页」这条原定路线**成本比想象高**，先说结论：
+
+1. **设置栏是客户端 UI 包提供的**，不是宿主侧注册。运行时里提供 settings section 的全是 `dsh-client-ui-settings-*`（`SettingsRoot.js` / `registerSection`）。⇒ 我们要走那条路，就得写一个**真客户端 UI 插件**（React 组件 + section 注册），成本与「最小版」三个字不匹配。
+2. **宿主侧注册「命令」才是最便宜的路**，而且有现成范例：`@deepseek-ai/dsh-command-goal`（`lib/index.js`，187 行，就是 `/goal` 命令）。形状已实读：
+
+```js
+import { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
+
+const name = 'command-…'
+const inject = ['commands', …]          // ← 注意这一行
+
+function apply(ctx) {
+  ctx.commands.register({
+    definitionId: CommandDefinitionId('@…/dsh-command-…'),
+    name: 'pet',
+    description: '…',
+    input: { hint: '[reset|status]', attachments: false },
+    handler: (invocation) => { …; return { text: '…' } },   // handler 返回 { text }
+  })
+}
+export { apply, inject, name }
+```
+
+**两条必须先想清楚的风险（V4 计划里要正面处理）**：
+
+- **`inject` 会不会把插件挂死？** 我们现在的 `inject = ['webServer']`。若加上 `'commands'` 而该服务缺席，插件会 **pending**（本仓 2026-10-11 那次「33 条 pending」事故就是这么显现的）。V4 必须查清 cordis 的**可选注入**写法（`inject: { required, optional }` 之类），**没有可选注入就不加依赖** —— 宁可把重置做成「删文件 + 重启」的文档流程。
+- **`CommandDefinitionId` 要不要真 import？** branding 是**编译期**的（与 `credentialRef` 同源），运行时传普通字符串大概率可用。V4 实测钉死；**能不加 `@deepseek-ai/*` 依赖就不加**（本仓的「零依赖」是硬承诺）。
+
+**对本 spec §13 裁决②的修正建议**：把「设置页最小版」改成 **「`/pet` 命令（reset / status）+ 文档说明」**，理由：设置页要写客户端 UI 插件，而命令是宿主侧 4 行；两者对用户的价值差不了多少（都是「能重置、能看状态」），成本差一个数量级。**这条改到 V4 计划期由用户拍板。**
