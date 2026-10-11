@@ -1,7 +1,10 @@
 /**
  * dsh-kylin-pet — client 半（单文件，宿主契约强制）。
  * §1 契约  §2 小工具  §3 演员  §4 世界  §5 手势  §6 挂载与主循环
- * 直挂 document.body：桌宠是装饰层（见实施计划的「与 spec 的偏差」）。
+ * 挂进宿主槽位 `shell.overlay`（`Slots.listSubTree`: kind=list, purpose="Frame-wide floating layer"）。
+ * **不直挂 document.body** —— 官方 ui-plugin 契约明写「Do not replace the app root or append a
+ * second application to document.body」；挂在 body 上的树没有主人，插件被禁用时没人摘它。
+ * （V5b 踩过这个坑：开关关掉、桌宠不消失。）
  */
 window.__ModuleLoader__.load({
   id: 'dsh-kylin-pet',
@@ -112,9 +115,10 @@ window.__ModuleLoader__.load({
     const ECHO_DONE = '嗯'
     const ANIM_EXT = '.webm'
     const STAGE_ID = 'dsh-kylin-pet-stage'
+    const SLOT_NAME = 'shell.overlay'   // 宿主槽位名（Slots.listSubTree 里的 Frame-wide floating layer）
     const DROP_DISTANCE = 120   // spec §8：拖到一起放下即触发一次近距离互动
 
-    exports.inject = []
+    exports.inject = ['slots']
 
     /* ==================== §2 小工具 ==================== */
     const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
@@ -1295,7 +1299,8 @@ window.__ModuleLoader__.load({
       return root
     }
 
-    async function start() {
+    /** @param host 宿主给的挂载点（槽位里的 div）。测试环境没有槽位时退回 body。 */
+    async function start(host) {
       if (document.getElementById(STAGE_ID)) return
       let config
       try {
@@ -1314,7 +1319,7 @@ window.__ModuleLoader__.load({
       const pairKey = pairId(config.cast[0].id, config.cast[1].id)
       bondState = Object.assign({ pairKey: pairKey }, normalizeBondPair(await loadBondPair(pairKey)))
       const root = createStageRoot()
-      document.body.appendChild(root)
+      ;(host || document.body).appendChild(root)
       const world = createWorld({ config: config, root: root })
       /* §3.6：心智与导演 —— 必须在导演第一次 step 之前给每只宠赋 bond 与 x/y（顺序不能反）。
          缺 bond ⇒ unlocked/socialGate 读 bond.familiarity 直接抛；缺 x/y ⇒ dist 恒 NaN ⇒
@@ -1474,18 +1479,43 @@ window.__ModuleLoader__.load({
        `dsh-client-ui-model-selection` 两个官方插件的 client 半边都收 ctx，且各注册 1 与 2 处 ctx.effect。
        不注册的后果就是你看到的样子：**开关关掉、桌宠不消失** —— 模块与样式都被驱逐了，
        而我们 append 到 body 上的 root 没人摘。 */
+    /**
+     * 槽位里的挂载点：**这棵树由宿主拥有**。
+     * 插件被禁用 ⇒ 客户端模块系统驱逐本模块 ⇒ React 卸载它 ⇒ 我们 effect 的 cleanup 跑 ⇒ 桌宠当场
+     * 消失。**不需要重启引擎、不需要刷新页面** —— 这正是「挂进槽位」相比「直挂 body」的全部意义：
+     * 生命周期的负责人是宿主，不是我们。
+     */
+    function PetOverlay() {
+      const React = require('react')
+      const ref = React.useRef(null)
+      React.useEffect(() => {
+        let stop = null
+        let gone = false
+        start(ref.current).then((fn) => {
+          stop = fn
+          // 启动是异步的（要读配置与账本）：若在它跑完之前就被卸载，得补收一次，
+          // 否则「开关快速关了又开」会留下一个没有主的舞台。
+          if (gone && fn) fn()
+        }, (err) => console.warn('[dsh-kylin-pet] 启动失败：', err))
+        return () => { gone = true; if (stop) stop() }
+      }, [])
+      return React.createElement('div', {
+        ref: ref,
+        style: { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: 2147483000 },
+      })
+    }
+
     exports.apply = (ctx) => {
-      let teardown = null
-      let gone = false
-      start().then((fn) => {
-        teardown = fn
-        // 启动是异步的（要读配置与账本）：若在它跑完之前就被卸载，得补收一次，
-        // 否则「开关快速关了又开」会留下一个没有主的舞台。
-        if (gone && fn) fn()
-      }, (err) => console.warn('[dsh-kylin-pet] 启动失败：', err))
-      if (ctx && typeof ctx.effect === 'function') {
-        ctx.effect(() => () => { gone = true; if (teardown) teardown() }, 'dsh-kylin-pet stage @ ' + ROUTE_PREFIX)
+      const slots = ctx && ctx.slots
+      if (!slots || typeof slots.inject !== 'function' || typeof slots.register !== 'function') {
+        console.warn('[dsh-kylin-pet] 没有 slots 服务，舞台未启动')
+        return
       }
+      // 与官方 ui-plugin 模板同形：inject 包在 effect 里，注册本身也是可回收的。
+      ctx.effect(() => slots.inject(SLOT_NAME, () => slots.register(
+        { name: SLOT_NAME, id: 'dsh-kylin-pet', order: 1000, label: '麒麟仔与鲸鱼娘' },
+        PetOverlay,
+      )), 'dsh-kylin-pet slot @ ' + SLOT_NAME)
     }
     return exports
   },

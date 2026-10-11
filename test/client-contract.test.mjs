@@ -48,7 +48,10 @@ test('client 与 host 契约逐键对齐（允许重复，禁止漂移）', () =
 test('client 只暴露 inject / apply / __kylinContract', () => {
   const client = loadClient()
   assert.deepEqual(Object.keys(client).sort(), ['__kylinContract', 'apply', 'inject'])
-  assert.deepEqual(canon(client.inject), canon([]))   // 跨 realm：client 的数组不是本 realm 的 Array 实例
+  // `slots` 是**硬依赖**：舞台挂进宿主槽位 shell.overlay，生死交给宿主（官方 ui-plugin 契约：
+  // 不要往 document.body 追加第二个应用）。声明它之后，宿主不支持槽位时插件会 pending，
+  // 而不是静默挂到 body 上当没人管的孤儿 —— 那正是「关开关桌宠不消失」的根因。
+  assert.deepEqual(canon(client.inject), canon(['slots']))   // 跨 realm：client 的数组不是本 realm 的 Array 实例
   assert.equal(typeof client.apply, 'function')
 })
 
@@ -80,6 +83,7 @@ test('V5b·1 apply 收 ctx 并注册**恰好一处** effect —— 关插件开�
   const ex = loadModuleExports()
   const labels = []
   const disposers = []
+  const slots = []
   const ctx = {
     effect: (cb, label) => {
       labels.push(label)
@@ -87,13 +91,22 @@ test('V5b·1 apply 收 ctx 并注册**恰好一处** effect —— 关插件开�
       if (typeof d === 'function') disposers.push(d)
       return d
     },
+    // 形状照宿主 Slots 服务：inject(槽名, 注册回调) 返回收回落子的 disposer。
+    slots: {
+      inject: (name, register) => { slots.push(name); register(); return () => { slots.pop() } },
+      register: () => () => {},
+    },
   }
   ex.apply(ctx)
   assert.equal(labels.length, 1, '必须注册**恰好一处** effect（多一处会在卸载时重复收尾）')
   assert.ok(String(labels[0]).indexOf('dsh-kylin-pet') >= 0, 'label 要能认出是我们：' + labels[0])
   assert.equal(disposers.length, 1)
-  // 卸载必须**安全**：start() 是异步的，若在它跑完前就被卸载（开关快速关了又开），
-  // 也绝不能抛 —— 抛会让整个模块的驱逐失败。
+  // 挂的必须正是「整帧浮动层」槽位 —— 挂别处等于又把它塞进某个有主布局里。
+  assert.deepEqual(slots, ['shell.overlay'])
+  // 卸载必须**安全**：绝不抛 —— 抛会让整个模块的驱逐失败。
   assert.doesNotThrow(() => disposers[0]())
+  assert.deepEqual(slots, [], '卸载后槽位注册要被收回')
+  // 宿主没有 slots 服务时必须**响亮降级**（warn 一句就退出），不许静默挂到 body 上。
+  assert.doesNotThrow(() => ex.apply({ effect: () => () => {} }))
 })
 
