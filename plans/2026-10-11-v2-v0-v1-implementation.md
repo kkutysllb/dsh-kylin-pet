@@ -30,7 +30,7 @@
 | `src/server/static-assets.js` | 新建 | 素材解析：角色白名单 + 名字守卫 + 用户目录优先 + 前缀复检 |
 | `src/server/entry.js` | 新建 | 插件契约 + 路由表 + JSON/文件响应 |
 | `src/stage/client.js` | 新建 | **单文件**：§1 契约 §2 工具 §3 演员 §4 世界 §5 手势 §6 挂载 |
-| `test/*.test.mjs` | 新建 | `node --test test/` |
+| `test/*.test.mjs` | 新建 | `npm test`（= `node --test "test/**/*.test.mjs"`） |
 | `tools/harness.mjs` | 新建 | 开发期验收台（真 host 模块 → 真浏览器截图） |
 | `package.json` | 改 | test 指向 test/、补 harness、兼容表加 0.2.1-alpha.2 |
 | `assets/pet/{main,whale}-animation/*.webm` | 入册 | 38 段（19×2） |
@@ -674,7 +674,13 @@ export function createAssetResolver(opts) {
       if (!existsSync(candidate)) continue
       const st = statSync(candidate)
       if (!st.isFile()) continue
-      if (!under(realpathSync(candidate), root)) continue   // 符号链接逃逸复检
+      // 符号链接逃逸复检：**两侧都要规范化**。只规范化 candidate、拿未规范化的 root 去比，
+      // 等于比较两个不同空间的路径：macOS 上 /var 是指向 /private/var 的符号链接，
+      // 任何位于 /var 下的根（os.tmpdir()、软链安装的 store、软链 home）都会让**每一个**
+      // 候选被判为逃逸 → 包内与用户覆盖素材全部静默 404。这是 2026-10-11 执行期实测到的 bug。
+      let realRoot
+      try { realRoot = realpathSync(root) } catch { continue }
+      if (!under(realpathSync(candidate), realRoot)) continue
       return { path: candidate, mime: kind === 'pet' ? 'video/webm' : 'image/png', size: st.size }
     }
     return null
@@ -764,7 +770,9 @@ test('符号链接逃逸被 realpath 复检挡住', () => {
 
 - [ ] **Step 3: 跑**
 
-Run: `node --test test/` → Expected: **16 pass / 0 fail**。
+Run: `npm test` → Expected: **16 pass / 0 fail**。实测 `ℹ tests 16 / pass 16 / fail 0`。
+
+（原文是 `node --test test/` —— Node v24 下必红，见 Task 5 Step 3 的执行期更正。）
 
 - [ ] **Step 4: Commit**
 
@@ -858,8 +866,12 @@ import { loadPetConfig } from '../src/server/pet-config.js'
 import { createAssetResolver } from '../src/server/static-assets.js'
 
 function boot() {
-  const config = loadPetConfig({ home: '/nonexistent-home-for-test' })   // 只走包内素材
-  const handler = createHandler({ config, resolveAsset: createAssetResolver({ config }) })
+  // 两处都钉同一个不存在的 home：**只有包内素材**，测试才是密闭的。
+  // （原先只钉了配置层，素材解析层落到真实 $DSH_HOME —— 这条「真素材」测试于是在
+  //   本机取到的是用户目录素材，而不是它声称要验的包内素材。2026-10-11 实测。）
+  const home = '/nonexistent-home-for-test'
+  const config = loadPetConfig({ home })
+  const handler = createHandler({ config, resolveAsset: createAssetResolver({ config, home }) })
   const server = createServer(handler)
   return new Promise((ok) => server.listen(0, '127.0.0.1', () => ok({
     server,
@@ -930,7 +942,9 @@ test('404 / 405 / 越权', async () => {
 
 - [ ] **Step 3: 跑**
 
-Run: `node --test test/` → Expected: **21 pass / 0 fail**。若「真素材」一条红，先回去跑 Task 1（38 段没入册）。
+Run: `npm test` → Expected: **21 pass / 0 fail**。实测 `ℹ tests 21 / pass 21 / fail 0`。
+
+若「真素材」一条红：先确认 `boot()` 里 `createAssetResolver` **钉了不存在的 home**（否则它读的是用户目录素材，排查方向会跑偏），再回去跑 Task 1（38 段没入册）。
 
 - [ ] **Step 4: Commit**
 
@@ -1397,7 +1411,7 @@ test('工厂能接住 require 形参（漏了它整个条目会激活失败）',
 
 - [ ] **Step 3: 跑**
 
-Run: `node --test test/` → Expected: **24 pass / 0 fail**。
+Run: `npm test` → Expected: **24 pass / 0 fail**。
 
 - [ ] **Step 4: Commit**
 
@@ -1640,7 +1654,7 @@ git log --oneline
 |---|---|---|
 | 1 | 素材入册 | `node scripts/check-assets.mjs assets/pet` -> 38/38 PASS |
 | 2 | clean-room | `node scripts/check-clean-room.mjs` -> 两行 PASS，且负对照能红 |
-| 3 | 单元 / 集成测试 | `node --test test/` -> 24 pass / 0 fail |
+| 3 | 单元 / 集成测试 | `npm test` -> 24 pass / 0 fail |
 | 4 | 双宠同框 | Task 11 的三张截图 + DOM 断言输出 |
 | 5 | 实机 | 你装进 web profile 后看到两只宠（Task 12 Step 2） |
 
