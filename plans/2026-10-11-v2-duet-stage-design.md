@@ -327,3 +327,40 @@ spec §12 R3 的结论现在明确了，先钉在这里，免得 V3 开工时重
 - 余额探针必须**可注入**（不注入就只能打真网络，测试里没法跑）；
 - 本机 `DEEPSEEK_API_KEY` 是否在场、DeepSeek 余额接口的确切形状，**留到 V3 计划期用一次真实调用钉死**（与 V2 钉事件名同一手法）。
 
+
+### 14.1 余额接口与凭据取值（2026-10-11 补测，现已全部钉死）
+
+**凭据服务的真实形状（读 `dsh-credentials-local` 源码，非推测）**：
+
+| 方法 | 返回 | 语义 |
+|---|---|---|
+| `resolve(ref)` | `{ value, source }` 或 `undefined` | `source` ∈ `'env'` / `'file'` / dotenv 来源 |
+| `describe(ref)` | `{ configured, source, writable }` | `writable` 表达「这一层能不能被本进程改」 |
+
+**解析顺序**（`resolve` 实现，`:573-584`）：**继承环境（inherited）→ 文件 `refs:` → dotenv 兜底**。
+
+**本机实况**：`DEEPSEEK_API_KEY` **不在** `process.env`，但**在** `~/.kcoder/.credentials.yaml` 的 `refs:` 段里（该文件 0600）。⇒ `resolve` 会返回 `{ value, source: 'file' }`。
+
+**关键实现取舍**：插件**不需要 import 任何 `@deepseek-ai/*` 包** —— `ctx.get('credentials')` 直接从宿主拿到服务对象；`credentialRef()` 的 branding 是**编译期**的，运行时传普通字符串即可。零依赖这条路走得通。
+
+**余额接口（已用官方文档钉死，`api-docs.deepseek.com/zh-cn/api/get-user-balance`）**：
+
+```
+GET https://api.deepseek.com/user/balance
+Authorization: Bearer <DEEPSEEK_API_KEY>
+
+200 →
+{
+  "is_available": true,
+  "balance_infos": [
+    { "currency": "CNY" | "USD",
+      "total_balance": "110.00",
+      "granted_balance": "10.00",
+      "topped_up_balance": "100.00" }
+  ]
+}
+```
+
+> ⚠️ **余额是字符串，不是数字。** 这直接决定了「绝不伪造数字」怎么落地：**解析时保留原始字符串**，只在算档位阈值时转一次数值；档位判定失败就退 `unavailable`，**不许把 `"110.00"` 变成 `110` 再假装它精确**。`balance_infos` 是**数组**（可能多币种），选币种要有明确规则并写进 detail，不能默认取 `[0]` 了事。
+
+**一条如实登记的失败探针**：我本想用「拿假 key 打接口，401=存在 / 404=不存在」来低成本验证端点存在性 —— 但**控制组（一个不存在的路径）也返回 401**（DeepSeek 在鉴权层就拦了）。⇒ **该探针无判别力，不作证据**，端点形状改由官方文档确认。
