@@ -1321,3 +1321,67 @@ git commit -m 'test(v3b): 真浏览器取证（合演四阶段 / 账本随互动
 
 
 
+
+
+---
+
+# V3b 取证记录（Lead 亲跑，2026-10-11）
+
+**装备**：升级后的 `tools/harness.mjs`（账本路径可注入 + `/__balance?case=`）+ headless Chromium。**脚本先把账本种到 `affinity=60 / familiarity=20`** —— 因为新装是 0 好感，取证的目的是「一场互动能不能走完」，不是「它们多久才熟」。
+
+## 八条硬门（最终全 true）
+
+| 门 | 结果 | 实测 |
+|---|---|---|
+| 探针已挂 | ✅ | `directorState: ['duet','memories','moods']` |
+| **四阶段真的走完** | ✅ | `phasesSeen = ['approach','open','exchange','settle']` |
+| 一场互动收尾 | ✅ | `memoriesRaw` 里有不带 `aborted` 的条目 |
+| **账本按剧本表变化** | ✅ | `lastEvent = {kind:'gift', affinityDelta:3, familiarityDelta:1}` |
+| 冷却生效 | ✅ | `dupWithinCooldown: false` |
+| 拎起即退出社交 | ✅ | `duetWhileHeldIsNull: true` |
+| **诱因只改心智** | ✅ | 注入 `agent/error` 后 2s 内**无气泡**且 mood 下降 |
+| 零 console/page 错误 | ✅ | `errors: []` |
+
+## 截图（`evidence/v3b/`）
+
+| 文件 | 场景 | sha256 |
+|---|---|---|
+| `01-interaction.png` | 合演收尾（两只并肩） | `a7e6548b…` |
+| `02-held.png` | 拎起一只 | `9f61be0a…` |
+| `03-stimulus-to-mind.png` | 诱因只改心智 | `64352d9b…` |
+
+## ⚠️ 取证抓到的**四处产品缺陷**（三处通过了当时全部 141 个测试）
+
+1. **`NEAR_RADIUS(150)` 比世界的分离下限 `156.8` 还小** ⇒ `near`/`veryNear` 是**恒假式** ⇒ `approach` 永不结束 ⇒ 6s 超时 ⇒ abort（不上冷却）⇒ **无限循环**。**没有任何剧本走过第一阶段。** 两个常量分属两个子系统，单看各自都对。→ Task 5d
+2. **`settle` 把 `[ev]`（数组）传给期望单对象的 `queueBondEvent`** ⇒ 落盘成 `{kind:'unknown', affinityDelta:0}` ⇒ **互动永不改变关系**。→ 同笔提交
+3. **`m.bond` 只在启动时赋一次** ⇒ `TUNING.UNLOCK` 的条件整个会话都不生效（要刷页面）。→ Task 5c
+4. **`world.pairKey` 在 `createDirector` 之后才赋** ⇒ 导演拿到 `undefined`，全靠 `queueBondEvent` 的回退兜住 —— **靠兜底活着**。→ Task 5c
+
+> **第 2 条最深的教训**：测试替身的形状是**从有 bug 的调用点抄来的**（参数名 `evs`（复数）、断言 `stuck[0][0]`），于是 **141 个绿测试在确认 bug 而不是抓它**。写替身要对着**消费者**的签名写，不是对着调用点。
+
+## 执行期发现的**方法学**问题（关于验收本身）
+
+- **「120ms 内 clip 没变」是空过**：诱因要等 `/state` 下一拍（≈500ms）才被消费 —— **V2 在 120ms 时也没变**。判别口径改成「**特定那句话没出现**」（V2 的 `turn-fail` 会说「让我想想」）+ 「档位没被强制换」。
+- **修前/修后赢家区间不相交**（Task 4c 的 D2）：`approach` 修前在 `d<90` 赢、修后在 `d>288` 赢 ⇒ **一个场景不可能同时满足「修前必红」与「负对照必红」**，必须**分别选场景**。
+- **兜底会满足「最终状态」类断言**：删掉 `duet = null` 后，末阶段 `deadline` 的兜底 abort 会把槽位清掉 ⇒ 朴素断言恒绿。要有一个**不经过兜底**的观测口（`driveToSettle`）。
+
+## 脚本自身的四个坑（都不是产品缺陷）
+
+| # | 症状 | 真因 |
+|---|---|---|
+| 1 | 拖拽抓不到命中区 | 取「最后一个 div」= **气泡**（在角色上方）。改按 `pointerEvents === 'auto'` |
+| 2 | `ECONNREFUSED` 且 banner 出现两次 | `stopHarness` 的兜底定时器捕获**模块级 `child`**，已被下次 `startHarness` 重新赋值 ⇒ 旧定时器 **SIGKILL 掉新进程** |
+| 3 | `bondMovedPerTable` 无故红 | `lastKind` 取自第一次互动的快照，`lastEvent` 却读自更晚的账本 ⇒ 两者错位 |
+| 4 | 余额播报等不到 | client 每 **30s** 才读一次 `/balance`，只等 8s 不够 |
+
+## 并发写入事故（如实登记）
+
+Task 5b 派出后，Lead 连等数轮只观察 `client.js` 的 mtime 未见变化，遂**判定子代理未在工作并接手**。实际上子代理已在**另一个文件**（`test/phase.test.mjs`）写下 6 条测试。两个写者进入同一区域。
+
+**结果侥幸是好的**（Lead 的实现 + 子代理的测试，合起来 149/149），但错误是明确的：**「没看到写入」不等于「没在工作」**；判断子代理是否在动，必须检查**它写入范围内的每一个文件**，而不是自己在等的那个。宁可多等一轮。
+
+子代理随后上报两条**只有它能提供**的缺陷，Lead 全部采纳：
+- **`duet.winner` 判定是恒等式**（比较「各自到实时中点」= `|A−B|/2`，永远相等）⇒ 永远判发起方赢。改成「各自到**自己 target**」，正合 spec §7「先到者得」。
+- **无 `who` 的 happy 被整段吞掉** ⇒ `greet.exchange / gift.open / reconcile.exchange` 从「两只都播」退化成「只有发起方乐」，与 spec §7 相反。改成按 `spec.who` 分支，无 who 时逐字保留原行为，并补 `Task5b·7` 守住它。
+
+
