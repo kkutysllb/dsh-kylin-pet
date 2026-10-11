@@ -915,8 +915,16 @@ function deliverStimulus(stimulus) {
 
 ### Step 5: 测试 `test/client-v3b.test.mjs`
 
-把 `createMind` / `stepMind` / `chooseIntent` / `createDirector` / `SCRIPTS` / `ADVANCE` / **`LINES`** 全部挂进 `__kylinContract`
-> （`LINES` 是 2026-10-11 补的：Task 4 的 `say ⟷ LINES` 双向对账需要跨 realm 读取口，原清单漏了它。另外 `SCRIPTS`/`ADVANCE`/`LINES` 是 `const`（不提升），**契约冻结必须在工厂体末尾**，否则 TDZ。）（**纯逻辑，无 DOM**），跨 realm 调：
+**`__kylinContract` 的键本 Task 一个都不需要新加** —— 全部已经在里面了（T1/T2/T4/T4b 落的，2026-10-11 核对）：
+```
+createMind, stepMind, unlocked, socialGate, chooseIntent,      ← T2
+createDirector,                                                 ← T3
+SCRIPTS, ADVANCE, LINES,                                        ← T4 / T4b
+```
+
+> **⚠️ 不要去重复添加**（对象字面量里重复键不报错，但第二个会覆盖第一个 —— 一旦将来某一份被改名或改签名，会变成一处**静默的错位**）。本 Task 只需**确认**它们在，然后直接用 `__kylinContract` 里的引用做跨 realm 测试。
+>
+> `SCRIPTS`/`ADVANCE`/`LINES` 是 `const`（不提升），所以**契约冻结必须在工厂体末尾**，否则 TDZ —— 这一条 T4 已经处理过了。（**纯逻辑，无 DOM**），跨 realm 调：
 1. **`deliverStimulus` 不再直接换档**：注入 `turn-fail` 后，断言**没有任何 actor 的 `play` 被同步调用**、但对应 mind 的 `mood` 掉了 —— 这条是「改成心智」的**核心证据**（用注入的桩 `play` 计数）；
 2. **点概率随 affinity 变**：`affinity = 0` → 0.5；`affinity = +100` → 0.95（夹住）；`affinity = -100` → 0.05；
 3. **导演在对方被拎起时不配对**（`freePartner` 跳过 held）；
