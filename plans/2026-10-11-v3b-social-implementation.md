@@ -780,7 +780,10 @@ if (candidate === 'approach') {
 
 1. **没有剧本的意图不开合演**：构造 `pick.intent = 'approach'` 且距离够近的一拍，断言 `open` **未被调用**（`duet` 仍为 null），且该 actor 拿到了 `target` 或播了 `walk`；
 2. **不再有 `no-phase` 空转**：让场景自然跑 2000 拍，断言 `memories` 里**没有一条** `aborted === 'no-phase'`（修正前这条必红 —— 每两拍产生一条）；
-3. **approach 随距离单调**：`socialScore('approach', …, 360) > socialScore('approach', …, 100) > socialScore('approach', …, 0)`；
+3. **approach 随距离单调**（**从公开边界观测，不要直接调 `socialScore`**）：`socialScore` **不在 `__kylinContract` 里**（契约只有 `createMind/stepMind/unlocked/socialGate/chooseIntent/createDirector/SCRIPTS/ADVANCE/LINES`），跨 realm 的测试根本够不到它。所以改成用 `chooseIntent` 观测：
+   - `affinity = 0`、距离 `360`（= `SOCIAL_RADIUS`）⇒ 返回 `intent === 'approach'`（远处想过去）；
+   - `affinity = 0`、距离 `60` ⇒ 返回 `intent !== 'approach'`（就在身边就没有「过去」可言）。
+   这条比直接比数值**更强**：它测的是导演真正消费的那个出口。
 4. **贴近时真剧本能赢**：`affinity = 20`、`dist ≈ 100` 下 `chooseIntent` 返回的 `intent` **必须是 `SCRIPTS` 里的键**（修正前会回 `approach`）；
 5. **端到端**：`affinity = 30`、自然跑 3000 拍，断言 `memories` 里**至少有一次正常收尾**（不带 `aborted`）且 `kind` 是 8 个剧本之一。
 
