@@ -398,3 +398,27 @@ export { apply, inject, name }
 - **`CommandDefinitionId` 要不要真 import？** branding 是**编译期**的（与 `credentialRef` 同源），运行时传普通字符串大概率可用。V4 实测钉死；**能不加 `@deepseek-ai/*` 依赖就不加**（本仓的「零依赖」是硬承诺）。
 
 **对本 spec §13 裁决②的修正建议**：把「设置页最小版」改成 **「`/pet` 命令（reset / status）+ 文档说明」**，理由：设置页要写客户端 UI 插件，而命令是宿主侧 4 行；两者对用户的价值差不了多少（都是「能重置、能看状态」），成本差一个数量级。**这条改到 V4 计划期由用户拍板。**
+
+### 15.2 补测：**profile 本身就加载 commands 服务** —— 3a 路线的前提基本成立
+
+读 `~/.coder/profiles/web/cordis.yml`（实测）发现它**在自己的组合里就带 commands 服务**：
+
+```
+284: - id: commands
+285:   name: '@deepseek-ai/dsh-commands'
+286: - id: command-feedback
+287:   name: '@deepseek-ai/dsh-command-feedback'
+292: - id: command-goal
+293:   name: '@deepseek-ai/dsh-command-goal'
+670: - id: ui-commands                     ← 客户端半边也在
+671:   name: '@deepseek-ai/dsh-client-ui-commands'
+```
+
+**这意味着两件事**：
+
+1. **服务一定在**（它属于 profile 的基础组合，不是某个可选 bundle）⇒ 若真的声明 `inject: ['commands']`，**本 profile 不会 pending** —— 我在 §15.1 担心的「为一条命令赌上全部功能」在本 profile 里不成立；
+2. **顺序也大概率没问题**：我们的 bundle 是把 `"dsh-kylin-pet"` **追加到 `dsh.profile.bundles[]` 末尾**，而 `commands` 在更早的基础层 ⇒ `apply()` 执行时它应当已就绪。
+
+**但结论不改成「可以放心 inject」**，理由是一条界：`inject` 是**硬依赖**，一旦某个别的 profile（或上游把 commands 拆出去）没有它，桌宠**整体 pending**。而 `ctx.get('commands')` 的代价只是「命令可能注册不上」，**桌宠照常活着**。
+
+> **V4 Task 3 的路线判定因此收敛为**：默认走 **3a（`ctx.get('commands')`，不声明 inject）**；只有当真机实测发现 `apply()` 执行时 `commands` 尚未就绪、导致注册失败时，才考虑加 `inject` —— 且加之前要问「值不值得为一条命令引入硬依赖」。**3b（文档化文件操作）始终保留为兜底，且已经在 README 里交付。**
