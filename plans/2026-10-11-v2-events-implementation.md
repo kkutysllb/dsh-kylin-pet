@@ -327,6 +327,14 @@ const uninstall = installStimuli(ctx, board)
 
 并把 `uninstall` 交给 `ctx.effect`。**订阅泄漏比路由泄漏更隐蔽**：路由重复注册会立刻 500，重复监听只是诱因翻倍——所以测试里要有「`apply` 两次只有一个监听器」的断言。
 
+> **执行期记录（子代理的设计选择；Lead 复核后接受并在此备案）**：它没有走「第二次注册前先 dispose」，而是用一个**模块级 `WeakSet`** 按 ctx 去重 —— `if (applied.has(ctx)) return`（`src/server/entry.js:61-66`）。理由直接：`ctx.on` 没有「重复即替换」语义，去重最省事。
+>
+> **trade-off（必须记下来，别当成没代价）**：同一 ctx 上**先 dispose 再 apply**（HMR 复活路径）会被这个守卫**静默吞掉**，插件再也回不来。本 profile 的 `hmr` 插件是**启用**的，所以这不是纯理论风险。
+>
+> **本片处置：接受。** 理由是恢复路径已知且明确（重启引擎即恢复），代价只落在「同 ctx 复活」这一种情形；**V4 收口时重新评估**，若要改，正确形态是「保留 ctx→disposer 映射，再次 apply 前先 dispose 旧的」。
+>
+> **判断依据不是「看着还行」，而是独立实测**：Lead 用真 `createHandler` + 真 HTTP 打了七条 —— 起步查询 `{cursor:0,stimuli:[]}` / `since=0` 回两条完整诱因 / `since=1` 只回第二条 / `since=2` 回空（边界）/ `since=abc` 按起步处理 / `health` 正常 / `POST /state` 405 —— 全部符合契约。
+
 ### Step 3: 测试 `test/entry.test.mjs` 追加
 
 1. `GET /state`（无 since）→ `{ cursor: 0, stimuli: [] }`；
